@@ -141,6 +141,7 @@ internal static class GuiScenarios
     {
         await pair.SyncAsync(cancellationToken);
         await model.RefreshCommand.ExecuteAsync(null);
+        var stableSpaces = model.Snapshot.Single(node => node.Label == "spaces");
         var displayedBefore = Labels(model.Snapshot.Single(node => node.Label == "control rounds").Children);
         var before = await pair.Caller.GetSnapshotAsync(cancellationToken);
         var revision = before.GetProperty("revision").GetUInt64();
@@ -160,9 +161,15 @@ internal static class GuiScenarios
         var expectedRound = Labels(Ma2aResultNode.ChildrenOf(roundsAfter.EnumerateArray().Last()));
         NativeRuntimePair.Check(model.Snapshot.Single(node => node.Label == "control rounds").Children.Any(round => Labels(round.Children).SequenceEqual(expectedRound)),
             "The GUI must render the actual newly observed control-round timestamp, peer count and outcome.");
+        NativeRuntimePair.Check(ReferenceEquals(stableSpaces, model.Snapshot.Single(node => node.Label == "spaces")),
+            "Refreshing control-round telemetry must retain the unchanged Space branch.");
         var final = NativeRuntimePair.Payload(await pair.Caller.CallAsync(NativeRuntimePair.Command("snapshot_stamp"), cancellationToken));
         NativeRuntimePair.Check(final.GetProperty("revision").GetUInt64() == revision && final.GetProperty("runtime_boot_id").GetString() == boot,
             "The GUI telemetry regression must remain within one unchanged durable revision and Runtime boot through its final assertion.");
+        var stampBytes = Encoding.UTF8.GetByteCount(final.GetRawText());
+        var snapshotBytes = Encoding.UTF8.GetByteCount(NativeRuntimePair.Payload(after).GetRawText());
+        NativeRuntimePair.Check(stampBytes < snapshotBytes, "An unchanged revision must be cheaper to check than fetching its full state.");
+        await NativeRuntimePair.PassedAsync($"Unchanged revision payload is {stampBytes} bytes versus {snapshotBytes} bytes for the full projection.");
         await NativeRuntimePair.PassedAsync("GUI refresh consumes real control-round telemetry changes while Runtime revision and boot stay identical.");
     }
 

@@ -67,6 +67,23 @@ public sealed class Ma2aToolSafetyTests : IDisposable
     }
 
     [Fact]
+    public async Task PrepareFilesReadSharesTheProtocolDefaultAndByteLimit()
+    {
+        var fields = new JsonObject { ["path"] = "data:/file" };
+        var arguments = new JsonObject { ["operation"] = "files.read", ["arguments"] = fields };
+
+        var result = await ExecuteAsync("ma2a_service_prepare", arguments);
+
+        var success = Assert.IsType<ToolExecutionResult.Success>(result);
+        Assert.Equal(Ma2aServiceRequests.MaximumInlineFileBytes, success.Value.GetProperty("body")[3].GetInt32());
+
+        fields["length"] = Ma2aServiceRequests.MaximumInlineFileBytes + 1;
+        var oversized = await ExecuteAsync("ma2a_service_prepare", arguments);
+
+        Assert.True(oversized.IsError);
+    }
+
+    [Fact]
     public async Task LocalCommandDescriptionPreservesReplayPolicyAndTypedFields()
     {
         var result = await ExecuteAsync("ma2a_describe", new JsonObject { ["operation"] = "space_grant" });

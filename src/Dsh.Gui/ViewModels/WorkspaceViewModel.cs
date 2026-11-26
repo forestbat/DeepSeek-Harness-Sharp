@@ -31,6 +31,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     private readonly Dictionary<(string Machine, string Session), FleetSessionViewModel> _windows = [];
     private readonly Dictionary<FleetSessionViewModel, Task> _retirements = [];
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private MachinesPageViewModel? _machinesPage;
     private Task? _disposal;
     private bool _closingSessions;
     private readonly Action<string, string, bool> _toast;
@@ -245,8 +246,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
             },
             folderPicker: () => FolderPicker?.Invoke() ?? Task.FromResult<string?>(null),
             pathSelected: (machine, path) => (GitWorkspaceMachine, GitWorkspacePath) = (machine, path))));
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Ma2a, "MA2A", machinesIcon, _ => new Ma2aViewModel()));
+        Pages.Register(new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => _machinesPage ??= new(Machines)));
     }
 
     /** Opens the new-session form, preset to a machine and project when started from one. */
@@ -287,6 +287,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
 
     private async Task DisposeCoreAsync()
     {
+        _machinesPage?.NativeConsole.Dispose();
         Machines.BeginNetworkShutdown();
         await Machines.WaitForNetworkOperationsAsync();
         // 退出时不能让"重新加载机器列表"占着闸门把我们卡死: 拿不到就放弃收尾, 由上层超时兜底。

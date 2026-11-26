@@ -18,9 +18,10 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private readonly SemaphoreSlim _commandGate = new(1, 1);
     private JsonObject? _pendingCommand;
     private string? _pendingDirectory;
-    private string? _stamp;
-    private string? _snapshotJson;
-    private Task? _observer;
+    private (ulong Revision, string? Boot)? _stamp;
+    private long _snapshotGeneration;
+    private bool _observeConnection;
+    private bool _observationActive = true;
     private bool _disposed;
     private const int RefreshIntervalSeconds = 5;
 
@@ -53,8 +54,9 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     partial void OnStateDirectoryChanged(string value)
     {
         StopObservation();
+        _observeConnection = false;
+        _snapshotGeneration++;
         _stamp = null;
-        _snapshotJson = null;
         Connected = false;
         Snapshot.Clear();
     }
@@ -102,67 +104,73 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private async Task ConnectAsync(CancellationToken cancellationToken)
     {
         StopObservation();
-        _stamp = null;
-        _snapshotJson = null;
+        _observeConnection = false;
+        var generation = ++_snapshotGeneration;
         await RefreshAsync(cancellationToken);
-        if (!Connected || _disposed) return;
-        _observation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _observer = ObserveAsync(_observation.Token);
+        if (generation != _snapshotGeneration || !Connected || _disposed) return;
+        _observeConnection = true;
+        StartObservation();
     }
 
     [RelayCommand]
     private void Disconnect()
     {
         StopObservation();
+        _observeConnection = false;
+        _snapshotGeneration++;
         Remote.Cancel();
         Connected = false;
         _stamp = null;
-        _snapshotJson = null;
         Snapshot.Clear();
         Endpoint = "未连接";
         Status = "已解除附着；Runtime、持久进程和 Agent 保持运行。";
     }
 
     [RelayCommand]
-    private async Task RefreshAsync(CancellationToken cancellationToken)
+    private Task RefreshAsync(CancellationToken cancellationToken)
+        => RefreshSnapshotAsync(includeTelemetry: true, cancellationToken);
+
+    private async Task RefreshSnapshotAsync(bool includeTelemetry, CancellationToken cancellationToken)
     {
-        if (!await _refreshGate.WaitAsync(0, cancellationToken)) return;
+        if (_disposed) return;
+        var generation = _snapshotGeneration;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        try { await ReadSnapshotAsync(linked.Token); }
+        try
+        {
+            if (includeTelemetry) await _refreshGate.WaitAsync(linked.Token);
+            else if (!await _refreshGate.WaitAsync(0, linked.Token)) return;
+            try
+            {
+                if (generation == _snapshotGeneration)
+                    await ReadSnapshotAsync(generation, includeTelemetry, linked.Token);
+            }
+            finally { _refreshGate.Release(); }
+        }
         catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
-        catch (Exception error) { Invalidate(error); }
-        finally { _refreshGate.Release(); }
+        catch (Exception error)
+        {
+            if (generation == _snapshotGeneration && !_disposed) Invalidate(error);
+        }
     }
 
-    private async Task ReadSnapshotAsync(CancellationToken cancellationToken)
+    private async Task ReadSnapshotAsync(long generation, bool includeTelemetry, CancellationToken cancellationToken)
     {
-        var directory = StateDirectory;
         var client = CreateClient();
-        var stamp = await client.CallAsync(new JsonObject { ["operation"] = "snapshot_stamp" }, cancellationToken);
-        var fingerprint = Stamp(stamp);
-        var snapshot = await client.GetSnapshotAsync(cancellationToken);
-        var after = await client.CallAsync(new JsonObject { ["operation"] = "snapshot_stamp" }, cancellationToken);
-        if (fingerprint != Stamp(after) || directory != StateDirectory || _disposed)
+        if (!includeTelemetry && Connected)
         {
-            Snapshot.Clear();
-            _stamp = null;
-            _snapshotJson = null;
-            Status = "状态在读取期间变化，正在等待重新同步。";
-            return;
+            var response = await client.CallAsync(new JsonObject { ["operation"] = "snapshot_stamp" }, cancellationToken);
+            var stamp = ReadStamp(response.GetProperty("result").GetProperty("payload"));
+            if (_stamp == stamp || generation != _snapshotGeneration || _disposed) return;
         }
+        var snapshot = await client.GetSnapshotAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (generation != _snapshotGeneration || _disposed) return;
         var payload = snapshot.GetProperty("result").GetProperty("payload");
-        if (snapshot.GetProperty("runtime_boot_id").GetString() != stamp.GetProperty("result").GetProperty("payload").GetProperty("runtime_boot_id").GetString())
-            throw new InvalidDataException("MA2A snapshot boot identifier differs from its stamp.");
-        if (payload.GetProperty("revision").GetUInt64() != stamp.GetProperty("result").GetProperty("payload").GetProperty("revision").GetUInt64())
-            throw new InvalidDataException("MA2A snapshot revision differs from its stamp.");
-        var projection = payload.GetRawText();
-        if (_stamp != fingerprint || _snapshotJson != projection || !Connected)
-            ReplaceNodes(Snapshot, payload);
-        _snapshotJson = projection;
         Endpoint = payload.GetProperty("endpoint").GetProperty("endpoint_id").GetString()!;
-        _stamp = fingerprint;
+        UpdateSnapshot(Ma2aResultNode.ChildrenOf(payload));
+        _stamp = ReadStamp(snapshot);
         Connected = true;
-        Status = "已连接；状态来自 Runtime 完整快照。";
+        Status = "已连接。连接观测与同步记录可手动刷新。";
     }
 
     private async Task ObserveAsync(CancellationToken cancellationToken)
@@ -170,7 +178,8 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(RefreshIntervalSeconds));
         try
         {
-            while (await timer.WaitForNextTickAsync(cancellationToken)) await RefreshAsync(cancellationToken);
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await RefreshSnapshotAsync(includeTelemetry: false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
@@ -210,9 +219,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
             ReplaceNodes(Result, response.GetProperty("result"));
             if (mutation) ClearPending();
             Status = "操作已完成。";
-            _stamp = null;
-            _snapshotJson = null;
-            if (Connected) await RefreshAsync(linked.Token);
+            if (Connected && mutation) await RefreshAsync(linked.Token);
         }
         catch (Exception error)
         {
@@ -279,14 +286,24 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private void Invalidate(Exception error)
     {
         _stamp = null;
-        _snapshotJson = null;
         Connected = false;
         Snapshot.Clear();
         Endpoint = "状态不可用";
         Status = error.Message;
     }
 
-    private static string Stamp(JsonElement response) => response.GetProperty("result").GetProperty("payload").GetRawText();
+    private static (ulong Revision, string? Boot) ReadStamp(JsonElement stamp)
+        => (stamp.GetProperty("revision").GetUInt64(), stamp.GetProperty("runtime_boot_id").GetString());
+
+    private void UpdateSnapshot(IReadOnlyList<Ma2aResultNode> nodes)
+    {
+        while (Snapshot.Count > nodes.Count) Snapshot.RemoveAt(Snapshot.Count - 1);
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            if (index == Snapshot.Count) Snapshot.Add(nodes[index]);
+            else if (!Snapshot[index].HasSameContent(nodes[index])) Snapshot[index] = nodes[index];
+        }
+    }
 
     private static void ReplaceNodes(ObservableCollection<Ma2aResultNode> target, JsonElement value)
     {
@@ -297,6 +314,20 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private static string DefaultStateDirectory() => OperatingSystem.IsWindows()
         ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ma2a")
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "state", "ma2a");
+
+    internal void SetObservationActive(bool active)
+    {
+        _observationActive = active;
+        if (active) StartObservation();
+        else StopObservation();
+    }
+
+    private void StartObservation()
+    {
+        if (!_observationActive || !_observeConnection || _observation is not null || _disposed) return;
+        _observation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _ = ObserveAsync(_observation.Token);
+    }
 
     private void StopObservation()
     {
@@ -312,12 +343,21 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
         StopObservation();
         _lifetime.Cancel();
         Remote.Dispose();
+        Connected = false;
         _lifetime.Dispose();
     }
 }
 
 public sealed record Ma2aResultNode(string Label, IReadOnlyList<Ma2aResultNode> Children)
 {
+    internal bool HasSameContent(Ma2aResultNode other)
+    {
+        if (Label != other.Label || Children.Count != other.Children.Count) return false;
+        for (var index = 0; index < Children.Count; index++)
+            if (!Children[index].HasSameContent(other.Children[index])) return false;
+        return true;
+    }
+
     public static IReadOnlyList<Ma2aResultNode> ChildrenOf(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.Object => value.EnumerateObject().Select(item => Create(item.Name, item.Value)).ToArray(),
@@ -327,4 +367,24 @@ public sealed record Ma2aResultNode(string Label, IReadOnlyList<Ma2aResultNode> 
 
     private static Ma2aResultNode Create(string name, JsonElement value) => value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
         ? new(name.Replace('_', ' '), ChildrenOf(value)) : new($"{name.Replace('_', ' ')}: {value}", []);
+
+    internal static IReadOnlyList<Ma2aResultNode> ChildrenOf(JsonNode? value) => value switch
+    {
+        JsonObject obj => obj.Select(item => Create(item.Key, item.Value)).ToArray(),
+        JsonArray array => array.Select((item, index) => Create($"[{index}]", item)).ToArray(),
+        _ => [Create("value", value)],
+    };
+
+    private static Ma2aResultNode Create(string name, JsonNode? value)
+    {
+        var label = name.Replace('_', ' ');
+        if (value is JsonObject or JsonArray) return new(label, ChildrenOf(value));
+        var text = value switch
+        {
+            JsonValue scalar when scalar.TryGetValue<bool>(out var boolean) => boolean.ToString(),
+            null => "",
+            _ => value.ToString(),
+        };
+        return new($"{label}: {text}", []);
+    }
 }

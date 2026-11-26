@@ -18,8 +18,8 @@ public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyLi
         new("files", "list", [PathField("path"), Text("after", true)], p => Ma2aServiceRequests.List(S(p, "path"), O(p, "after"))),
         new("files", "stat", [PathField("path")], p => Ma2aServiceRequests.Stat(S(p, "path"))),
         new("files", "mkdir", [PathField("path"), Flag("parents")], p => Ma2aServiceRequests.Mkdir(S(p, "path"), B(p, "parents"))),
-        new("files", "read", [PathField("path"), Number("offset"), Number("length", 0, 65_536, 65_536)], p => Ma2aServiceRequests.Read(S(p, "path"), U(p, "offset"), (uint)U(p, "length"))),
-        new("files", "write", [PathField("path"), Field("content_hex", new JsonObject { ["type"] = "string", ["max_bytes"] = Ma2aServiceSession.MaximumDataLength * 2 }), Flag("replace")], p => Ma2aServiceRequests.Write(S(p, "path"), (uint)Convert.FromHexString(S(p, "content_hex")).Length, B(p, "replace"))),
+        new("files", "read", [PathField("path"), Number("offset"), Number("length", 0, Ma2aServiceRequests.MaximumInlineFileBytes, Ma2aServiceRequests.MaximumInlineFileBytes)], p => Ma2aServiceRequests.Read(S(p, "path"), U(p, "offset"), (uint)U(p, "length"))),
+        new("files", "write", [PathField("path"), Text("content_hex", maximumBytes: Ma2aServiceRequests.MaximumInlineFileBytes * 2), Flag("replace")], p => Ma2aServiceRequests.Write(S(p, "path"), (uint)Convert.FromHexString(S(p, "content_hex")).Length, B(p, "replace"))),
         new("files", "rename", [PathField("from"), PathField("to"), Flag("replace")], p => Ma2aServiceRequests.Rename(S(p, "from"), S(p, "to"), B(p, "replace"))),
         new("files", "remove", [PathField("path"), Flag("recursive")], p => Ma2aServiceRequests.Remove(S(p, "path"), B(p, "recursive"))),
         new("transfer", "download", [PathField("path"), Text("local_path", maximumBytes: null), Flag("replace")], null),
@@ -32,8 +32,8 @@ public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyLi
         new("process", "process logs", [Text("process_id"), Number("cursor")], p => Ma2aServiceRequests.ProcessLogs(S(p, "process_id"), U(p, "cursor"))),
         new("process", "process attach", [Text("process_id"), Flag("stdin")], p => Ma2aServiceRequests.ProcessAttach(S(p, "process_id"), stdin: B(p, "stdin"))),
         new("process", "process stdin", [Text("process_id"), Text("input", maximumBytes: null), Flag("close")], p => Ma2aServiceRequests.ProcessStdin(S(p, "process_id"), B(p, "close"))),
-        new("process", "process signal", [Text("process_id"), Number("signal", 0, 6)], p => Ma2aServiceRequests.ProcessSignal(S(p, "process_id"), (byte)U(p, "signal"))),
-        new("process", "process terminate", [Text("process_id"), Number("grace_ms", 0, 60_000, 5_000)], p => Ma2aServiceRequests.ProcessTerminate(S(p, "process_id"), (uint)U(p, "grace_ms"))),
+        new("process", "process signal", [Text("process_id"), Number("signal", 0, Ma2aServiceRequests.MaximumProcessSignal)], p => Ma2aServiceRequests.ProcessSignal(S(p, "process_id"), (byte)U(p, "signal"))),
+        new("process", "process terminate", [Text("process_id"), Number("grace_ms", 0, Ma2aServiceRequests.MaximumProcessGraceMilliseconds, Ma2aServiceRequests.DefaultProcessGraceMilliseconds)], p => Ma2aServiceRequests.ProcessTerminate(S(p, "process_id"), (uint)U(p, "grace_ms"))),
         new("process", "process delete", [Text("process_id")], p => Ma2aServiceRequests.ProcessDelete(S(p, "process_id"))),
         new("agent", "discover", [Text("after", true)], p => Ma2aServiceRequests.Agents(O(p, "after"))),
         new("agent", "submit", [Text("agent"), Text("message", maximumBytes: Ma2aServiceRequests.MaximumAgentMessageBytes)], p => Ma2aServiceRequests.AgentSubmit(S(p, "agent"), S(p, "message"))),
@@ -93,8 +93,9 @@ public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyLi
 
     private static IReadOnlyList<Ma2aFieldViewModel> ProgramFields(bool optionalProgram = false) =>
     [
-        Text("program", optionalProgram),
-        Field("args", new JsonObject { ["type"] = "array", ["max_items"] = 256, ["items"] = new JsonObject { ["type"] = "string", ["max_bytes"] = 4096 } }),
-        Text("cwd", true),
+        Text("program", optionalProgram, Ma2aServiceRequests.MaximumProgramTextBytes),
+        Field("args", new JsonObject { ["type"] = "array", ["max_items"] = Ma2aServiceRequests.MaximumProgramArgumentCount,
+            ["items"] = new JsonObject { ["type"] = "string", ["max_bytes"] = Ma2aServiceRequests.MaximumProgramTextBytes } }),
+        Text("cwd", true, Ma2aServiceRequests.MaximumProgramTextBytes),
     ];
 }

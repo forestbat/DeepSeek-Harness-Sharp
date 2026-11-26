@@ -330,54 +330,22 @@ scripts:
 支持 TOON 格式输出，节省 token 消耗；
 支持搜索会话内容。
 
-## MA2A 原生控制台
+## 跨机器协作
 
-DSH 工作台中的 **MA2A** 页面连接本机 MA2A Runtime，由 Runtime 使用 Iroh 与其他 Endpoint 通信。
-本机需要另外安装 `ma2a`；对端使用 MA2A Runtime，无需为了原生服务安装 DSH Host。
-现有 Iroh SSH 机器和 MA2A Endpoint 分别管理。
+运行 `dsharp gui`，打开工作台的 **机器 → 跨机协作**。
+在页面选择兼容的运行时可执行程序，并填入对应的绝对状态目录。
+已启动的本机运行时可以直接连接，需要启动、停止或重启时使用页面上的操作。
+切换页面后可以回来继续查看同一个连接，退出工作台会解除附着，运行时和已启动的任务继续运行。
 
-在 Linux 上，可以先显式启动 Runtime，再打开工作台：
+在 **机器 → 机器管理** 中管理使用 SSH 或 SSH-over-Iroh 的 DSH Host，包括会话和机器配置。
+跨机协作通过本机运行时的版本 1 控制接口访问 Iroh 对端，管理协作空间、成员和服务授权。
+要访问远端服务，两端需要加入同一个空间，调用方需获得相应授权，对端需开放对应资源。
+例如，文件服务使用 `ROOT:/path`，其中 `ROOT` 是对端开放的目录名称。
+中断的下载可以在来源未变时从已校验的部分文件继续。
 
-```bash
-ma2a --state-dir "$HOME/.local/state/ma2a" start
-dsharp gui
-```
-
-在 MA2A 页面填写与启动命令相同的绝对状态目录，然后连接。
-Windows 默认目录为本机 LocalAppData 下的 `ma2a`。
-页面支持显式启动、停止和重启；可执行程序不在 PATH 时填写其完整路径。
-关闭页面或退出 GUI 只解除附着，已有 Runtime、持久进程和 Agent 保持各自的生命周期。
-
-控制台提供 Runtime／Endpoint 状态、Space、邀请与成员、服务授权和本机资源暴露管理，以及文件、传输、命令、交互终端、持久进程、Agent 任务、托管服务和 TCP 转发。
-使用远端服务前，两端需要在同一 Space 中；调用方需要相应 grant，对端还需要向该 Space 暴露对应资源。
-文件路径使用 `ROOT:/path`，其中 ROOT 是对端暴露的根名称。
-传输执行 BLAKE3 校验，下载被中断后保留带来源标识的部分文件，重试时可继续下载。
-
-远端已经运行 HTTP／SOCKS 代理时，可以在远端服务页创建 `proxy / forward`，将 `host`、`port` 设为该代理在目标 Runtime 一侧的监听地址。
-这里的 `127.0.0.1` 指目标机器自身。
-将 `local_port` 设为本机空闲端口后，在现有网络设置中使用这个转发地址；例如界面已成功监听本机 `17890`，且远端是 HTTP 代理时：
-
-```yaml
-network:
-  borrowed_outbound_machine: null
-  outbound_proxy:
-    url: http://127.0.0.1:17890
-```
-
-SOCKS 代理应使用匹配的 URL scheme，例如 `socks5://127.0.0.1:17890`。
-使用期间保持转发运行，并清空原 Fleet 借用出口选择，避免它覆盖配置的代理。
-TCP Proxy 提供授权后的字节隧道，远端 HTTP／SOCKS 服务需要事先存在。
-
-模型可以通过 `@deepseek-ai/dsh-ma2a` 插件使用相同的原生客户端实现：
-
-- `ma2a_describe`、`ma2a_command`：查看原生命令字段并管理本机 Runtime 资源。
-- `ma2a_service_prepare`：按命名操作构造 Files、Exec、Shell、Process、Agent、Hosted Service 或 Proxy 请求。
-- `ma2a_stream_open/read/write/close`：操作原生双向服务流，分别保留数据、控制和终态。
-- `ma2a_transfer`：上传、下载和恢复文件传输。
-
-工具调用明确携带 `state_directory`，并经过 DSH 工具审批和 MA2A 授权。
-副作用操作需要保存 RequestId；连接中断而结果未知时，应先检查现状，避免使用新 ID 重复创建进程或任务。
-MA2A Agent 的可执行程序须实现其 Agent stdio 协议；任务与 DSH 聊天会话分别管理。
+页面自动检查连接与配置修订。
+要查看同一次配置修订中的最新连通性和同步观测，点击 **刷新**。
+运行时操作中途断开时，可先核对状态，再用同一个请求 ID 重试，避免重复执行。
 
 ## 各版本新增功能
 

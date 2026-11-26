@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Net.Sockets;
-using System.Text;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using Dsh.Runtime;
 
 namespace Dsh.Ma2a;
 
@@ -12,8 +14,13 @@ internal static class Ma2aConnection
     private const int HeaderBytes = 12;
     private static readonly TimeSpan TransportDeadline = TimeSpan.FromSeconds(2);
 
+    [SupportedOSPlatform("windows")]
     internal static string WindowsPipeName(string stateDirectory)
-        => $"ma2a-{Blake3.Hasher.Hash(Encoding.Unicode.GetBytes(stateDirectory))}";
+    {
+        var path = FilePathAccess.ResolveWindowsLocalDirectoryPath(stateDirectory) ?? stateDirectory;
+        // The daemon hashes the raw UTF-16LE code units of the resolved Windows path.
+        return $"ma2a-{Blake3.Hasher.Hash(MemoryMarshal.AsBytes(path.AsSpan()))}";
+    }
 
     internal static async Task<Stream> ConnectAsync(string stateDirectory, CancellationToken cancellationToken)
     {

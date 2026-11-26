@@ -21,6 +21,13 @@ public sealed class WorkspacePageEntry(string id, string label, Geometry icon, F
     public object Create(WorkspacePageContext context) => factory(context);
 }
 
+public sealed class MachinesPageViewModel(MachinesViewModel machines)
+{
+    public MachinesViewModel Machines { get; } = machines;
+    public Ma2aViewModel NativeConsole { get; } = new();
+    public int SelectedTabIndex { get; set; }
+}
+
 /**
  * The extension point for workspace pages: entries appear in the navigation once a module registers them, in registration order.
  * The reserved ids name the pages the workspace expects (files and editing, Git, machine management); nothing is shown for an id until it is registered.
@@ -30,7 +37,6 @@ public sealed class WorkspacePages
     public const string Files = "files";
     public const string Git = "git";
     public const string Machines = "machines";
-    public const string Ma2a = "ma2a";
 
     public ObservableCollection<WorkspacePageEntry> Available { get; } = [];
 

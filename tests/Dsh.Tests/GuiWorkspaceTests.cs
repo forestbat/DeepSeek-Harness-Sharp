@@ -557,7 +557,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
             {
                 await ConnectedAsync(workspace);
                 output.WriteLine("Contributed pages: workspace connected.");
-                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, WorkspacePages.Ma2a], workspace.Pages.Available.Select(page => page.Id));
+                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines], workspace.Pages.Available.Select(page => page.Id));
                 var session = await StartTerminalAsync(workspace, "alpha", repo.Root, "repo shell", "sleep 30");
                 output.WriteLine("Contributed pages: terminal started.");
                 await UntilAsync(() => Card(workspace, "alpha", session) is not null, "the session card");
@@ -588,7 +588,8 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Machines));
                 var machines = workspace.Machines;
-                Assert.Same(machines, workspace.PageContent);
+                var machinesPage = Assert.IsType<MachinesPageViewModel>(workspace.PageContent);
+                Assert.Same(machines, machinesPage.Machines);
                 machines.NewLocalCommand.Execute(null);
                 (machines.Editor!.Name, machines.Editor.HarnessHome) = ("gamma", beta.Root);
                 await machines.SaveCommand.ExecuteAsync(null);
@@ -597,7 +598,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
                 await UntilAsync(() => machines.Machines.FirstOrDefault(row => row.Name == "gamma")?.StateText == connected, "machine management shows the new client");
                 output.WriteLine("Contributed pages: saved machine connected.");
                 Assert.Equal(MachineConnectionState.Connected, workspace.Fleet.Find("gamma")!.State);
-                Assert.Same(machines, workspace.PageContent);
+                Assert.Same(machinesPage, workspace.PageContent);
             }
             finally
             {

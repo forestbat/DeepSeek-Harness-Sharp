@@ -144,7 +144,11 @@ jobs:
           set -euo pipefail
           dotnet build tests/Dsh.Ma2a.Tests/Dsh.Ma2a.Tests.csproj -c Debug -m:1 --nologo
           MA2A_ARGS=(-failSkips)
-          if [[ "$RUNNER_OS" == "Windows" ]]; then MA2A_ARGS+=(-trait- "Platform=UnixOnly"); fi
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            MA2A_ARGS+=(-trait- "Platform=UnixOnly")
+          else
+            MA2A_ARGS+=(-trait- "Platform=WindowsOnly")
+          fi
           dotnet tests/Dsh.Ma2a.Tests/bin/Debug/net11.0/Dsh.Ma2a.Tests.dll "${MA2A_ARGS[@]}"
           dotnet build tests/Dsh.Ma2a.ToolTests/Dsh.Ma2a.ToolTests.csproj -c Debug -m:1 --nologo
           dotnet tests/Dsh.Ma2a.ToolTests/bin/Debug/net11.0/Dsh.Ma2a.ToolTests.dll -failSkips

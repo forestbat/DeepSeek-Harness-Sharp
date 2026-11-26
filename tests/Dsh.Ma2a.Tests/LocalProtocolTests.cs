@@ -13,6 +13,28 @@ public sealed class LocalProtocolTests
     private const ulong SnapshotRevision = 41;
     private const ulong SnapshotCorrelation = 7;
     private const string SnapshotBoot = "00000000000000000000000000000001";
+
+    [Fact]
+    [Trait("Platform", "WindowsOnly")]
+    public void WindowsPipeNameUsesTheFilesystemDirectoryIdentity()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        var directory = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}"));
+        try
+        {
+            var statePath = directory.FullName;
+            var name = Ma2aConnection.WindowsPipeName(statePath);
+            var extendedPath = $@"\\?\{statePath}";
+            var alternateCase = Path.Combine(directory.Parent!.FullName, directory.Name.ToLowerInvariant());
+
+            Assert.Equal(name, Ma2aConnection.WindowsPipeName(extendedPath));
+            Assert.Equal(name, Ma2aConnection.WindowsPipeName($"{alternateCase}/"));
+            Assert.NotEqual(name, Ma2aConnection.WindowsPipeName(directory.Parent.FullName));
+        }
+        finally { directory.Delete(); }
+    }
+
     [Fact]
     public async Task FramesMatchThePrivateIpcWireFormat()
     {
@@ -141,6 +163,40 @@ public sealed class LocalProtocolTests
     }
 
     [Theory]
+    [InlineData("snapshot_fetch", "snapshot", false)]
+    [InlineData("snapshot_fetch", "snapshot", true)]
+    [InlineData("space_list", "spaces", false)]
+    [InlineData("space_list", "spaces", true)]
+    public async Task SnapshotByteLimitAppliesToCompleteResponses(string operation, string resultType, bool oversized)
+    {
+        JsonNode payload = resultType == "snapshot" ? new JsonObject { ["revision"] = SnapshotRevision } : new JsonArray();
+        var envelope = JsonSerializer.SerializeToUtf8Bytes(new JsonObject
+        {
+            ["version"] = 1, ["request_id"] = null, ["revision"] = SnapshotRevision, ["runtime_boot_id"] = SnapshotBoot,
+            ["result"] = new JsonObject { ["type"] = resultType, ["payload"] = payload },
+        });
+        var padded = new byte[Ma2aSnapshot.MaximumSnapshotBytes + (oversized ? 1 : 0)];
+        envelope.CopyTo(padded, 0);
+        padded.AsSpan(envelope.Length).Fill((byte)' ');
+        var fragments = SnapshotFragments(padded);
+        var first = Ma2aJson.Parse(JsonSerializer.SerializeToUtf8Bytes(fragments[0]));
+        using var stream = ResponseFrames(fragments.Skip(1));
+
+        var read = Ma2aSnapshot.ReadAsync(stream, SnapshotCorrelation, operation, first, TestContext.Current.CancellationToken);
+        if (oversized)
+        {
+            var error = await Assert.ThrowsAsync<Ma2aProtocolException>(() => read);
+            Assert.Equal("invalid_frame", error.Error);
+        }
+        else
+        {
+            var response = await read;
+            Assert.Equal(resultType, response.GetProperty("result").GetProperty("type").GetString());
+            Assert.Equal(stream.Length, stream.Position);
+        }
+    }
+
+    [Theory]
     [InlineData("missing_final")]
     [InlineData("missing_middle")]
     [InlineData("noncontiguous_index")]
@@ -181,14 +237,16 @@ public sealed class LocalProtocolTests
             ["version"] = 1, ["request_id"] = null, ["revision"] = SnapshotRevision, ["runtime_boot_id"] = SnapshotBoot,
             ["result"] = new JsonObject { ["type"] = "snapshot", ["payload"] = payload },
         });
-        var fragments = envelope.Chunk(SnapshotFragmentBytes).Select((bytes, index) => new JsonObject
+        return (envelope, SnapshotFragments(envelope));
+    }
+
+    private static JsonObject[] SnapshotFragments(byte[] envelope)
+        => envelope.Chunk(SnapshotFragmentBytes).Select((bytes, index) => new JsonObject
         {
             ["type"] = "snapshot_fragment", ["revision"] = SnapshotRevision, ["runtime_boot_id"] = SnapshotBoot,
             ["index"] = index, ["last"] = (index + 1) * SnapshotFragmentBytes >= envelope.Length,
             ["data_hex"] = Convert.ToHexStringLower(bytes),
         }).ToArray();
-        return (envelope, fragments);
-    }
 
     private static MemoryStream ResponseFrames(IEnumerable<JsonObject> fragments)
     {

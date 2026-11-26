@@ -5,56 +5,61 @@ namespace Dsh.Ma2a.Tools;
 
 public static class Ma2aToolRequests
 {
-    public static readonly string[] Operations =
-    [
-        "files.stat", "files.list", "files.mkdir", "files.read", "files.write", "files.rename", "files.remove",
-        "exec.run", "shell.open", "process.start", "process.list", "process.inspect", "process.logs",
-        "process.attach", "process.stdin", "process.signal", "process.terminate", "process.delete",
-        "agent.list", "agent.submit", "agent.send", "agent.get", "agent.tasks", "agent.watch", "agent.cancel",
-        "agent.artifact", "service.describe", "service.call", "proxy.open",
-    ];
+    private static readonly Dictionary<string, Func<Arguments, JsonArray>> Builders = new(StringComparer.Ordinal)
+    {
+        ["files.stat"] = a => Ma2aServiceRequests.Stat(a.Text("path")),
+        ["files.list"] = a => Ma2aServiceRequests.List(a.Text("path"), a.Optional("after")),
+        ["files.mkdir"] = a => Ma2aServiceRequests.Mkdir(a.Text("path"), a.Flag("parents")),
+        ["files.read"] = a => Ma2aServiceRequests.Read(a.Text("path"), a.Number("offset", 0),
+            checked((uint)a.Number("length", Ma2aServiceRequests.MaximumInlineFileBytes))),
+        ["files.write"] = a => Ma2aServiceRequests.Write(a.Text("path"), checked((uint)a.Number("length", 0)), a.Flag("replace")),
+        ["files.rename"] = a => Ma2aServiceRequests.Rename(a.Text("path"), a.Text("destination"), a.Flag("replace")),
+        ["files.remove"] = a => Ma2aServiceRequests.Remove(a.Text("path"), a.Flag("recursive")),
+        ["exec.run"] = a => Ma2aServiceRequests.Exec(a.Text("program"), a.Args(), a.Optional("cwd"), a.Flag("stdin"),
+            a.Number("timeout_ms", Ma2aServiceRequests.DefaultExecTimeoutMilliseconds)),
+        ["shell.open"] = a => Ma2aServiceRequests.Shell(a.Optional("program"), a.Args(), a.Optional("cwd"),
+            checked((ushort)a.Number("columns", Ma2aServiceRequests.DefaultShellColumns)),
+            checked((ushort)a.Number("rows", Ma2aServiceRequests.DefaultShellRows)),
+            a.Number("lifetime_ms", Ma2aServiceRequests.MaximumLifetimeMilliseconds)),
+        ["process.start"] = a => Ma2aServiceRequests.ProcessStart(a.Text("program"), a.Args(), a.Optional("cwd"), a.Flag("stdin"), a.Optional("name")),
+        ["process.list"] = a => Ma2aServiceRequests.Processes(a.Optional("after")),
+        ["process.inspect"] = a => Ma2aServiceRequests.ProcessInspect(a.Text("id")),
+        ["process.logs"] = a => Ma2aServiceRequests.ProcessLogs(a.Text("id"), a.Values["cursor"]?.GetValue<ulong>()),
+        ["process.attach"] = a => Ma2aServiceRequests.ProcessAttach(a.Text("id"), a.Values["cursor"]?.GetValue<ulong>(), a.Flag("stdin")),
+        ["process.stdin"] = a => Ma2aServiceRequests.ProcessStdin(a.Text("id"), a.Flag("close")),
+        ["process.signal"] = a => Ma2aServiceRequests.ProcessSignal(a.Text("id"), checked((byte)a.Number("signal", 0))),
+        ["process.terminate"] = a => Ma2aServiceRequests.ProcessTerminate(a.Text("id"),
+            checked((uint)a.Number("grace_ms", Ma2aServiceRequests.DefaultProcessGraceMilliseconds))),
+        ["process.delete"] = a => Ma2aServiceRequests.ProcessDelete(a.Text("id")),
+        ["agent.list"] = a => Ma2aServiceRequests.Agents(a.Optional("after")),
+        ["agent.submit"] = a => Ma2aServiceRequests.AgentSubmit(a.Text("agent"), a.Text("text"), a.Optional("from_agent")),
+        ["agent.send"] = a => Ma2aServiceRequests.AgentSend(a.Text("agent"), a.Text("task"), a.Text("text")),
+        ["agent.get"] = a => Ma2aServiceRequests.AgentGet(a.Text("agent"), a.Text("task")),
+        ["agent.tasks"] = a => Ma2aServiceRequests.AgentTasks(a.Text("agent"), a.Optional("after")),
+        ["agent.watch"] = a => Ma2aServiceRequests.AgentWatch(a.Text("agent"), a.Text("task"), checked((uint)a.Number("after", 0))),
+        ["agent.cancel"] = a => Ma2aServiceRequests.AgentCancel(a.Text("agent"), a.Text("task")),
+        ["agent.artifact"] = a => Ma2aServiceRequests.AgentArtifact(a.Text("agent"), a.Text("task"), a.Text("name"), a.Number("offset", 0), a.Values["identity"] as JsonArray),
+        ["service.describe"] = a => Ma2aServiceRequests.Describe(a.Optional("after")),
+        ["service.call"] = a => Ma2aServiceRequests.ServiceCall(a.Text("name"), checked((ushort)a.Number("version", 1)), a.Text("operation"), Convert.FromHexString(a.Text("hex"))),
+        ["proxy.open"] = a => Ma2aServiceRequests.Proxy(a.Text("host"), checked((ushort)a.Number("port", 0)),
+            a.Number("idle_ms", Ma2aServiceRequests.DefaultProxyIdleMilliseconds)),
+    };
+
+    public static readonly string[] Operations = [.. Builders.Keys];
 
     public static JsonObject Prepare(string operation, JsonObject arguments)
     {
-        string Text(string name) => arguments[name]?.GetValue<string>() ?? throw new ArgumentException($"{name} is required.");
-        string? Optional(string name) => arguments[name]?.GetValue<string>();
-        bool Flag(string name) => arguments[name]?.GetValue<bool>() ?? false;
-        ulong Number(string name, ulong fallback) => arguments[name]?.GetValue<ulong>() ?? fallback;
-        string[] Args() => arguments["args"] is JsonArray items ? items.Select(item => item!.GetValue<string>()).ToArray() : [];
-        var body = operation switch
-        {
-            "files.stat" => Ma2aServiceRequests.Stat(Text("path")),
-            "files.list" => Ma2aServiceRequests.List(Text("path"), Optional("after")),
-            "files.mkdir" => Ma2aServiceRequests.Mkdir(Text("path"), Flag("parents")),
-            "files.read" => Ma2aServiceRequests.Read(Text("path"), Number("offset", 0), checked((uint)Number("length", 65_536))),
-            "files.write" => Ma2aServiceRequests.Write(Text("path"), checked((uint)Number("length", 0)), Flag("replace")),
-            "files.rename" => Ma2aServiceRequests.Rename(Text("path"), Text("destination"), Flag("replace")),
-            "files.remove" => Ma2aServiceRequests.Remove(Text("path"), Flag("recursive")),
-            "exec.run" => Ma2aServiceRequests.Exec(Text("program"), Args(), Optional("cwd"), Flag("stdin"), Number("timeout_ms", 60_000)),
-            "shell.open" => Ma2aServiceRequests.Shell(Optional("program"), Args(), Optional("cwd"),
-                checked((ushort)Number("columns", 80)), checked((ushort)Number("rows", 24)), Number("lifetime_ms", Ma2aServiceRequests.MaximumLifetimeMilliseconds)),
-            "process.start" => Ma2aServiceRequests.ProcessStart(Text("program"), Args(), Optional("cwd"), Flag("stdin"), Optional("name")),
-            "process.list" => Ma2aServiceRequests.Processes(Optional("after")),
-            "process.inspect" => Ma2aServiceRequests.ProcessInspect(Text("id")),
-            "process.logs" => Ma2aServiceRequests.ProcessLogs(Text("id"), arguments["cursor"]?.GetValue<ulong>()),
-            "process.attach" => Ma2aServiceRequests.ProcessAttach(Text("id"), arguments["cursor"]?.GetValue<ulong>(), Flag("stdin")),
-            "process.stdin" => Ma2aServiceRequests.ProcessStdin(Text("id"), Flag("close")),
-            "process.signal" => Ma2aServiceRequests.ProcessSignal(Text("id"), checked((byte)Number("signal", 0))),
-            "process.terminate" => Ma2aServiceRequests.ProcessTerminate(Text("id"), checked((uint)Number("grace_ms", 5_000))),
-            "process.delete" => Ma2aServiceRequests.ProcessDelete(Text("id")),
-            "agent.list" => Ma2aServiceRequests.Agents(Optional("after")),
-            "agent.submit" => Ma2aServiceRequests.AgentSubmit(Text("agent"), Text("text"), Optional("from_agent")),
-            "agent.send" => Ma2aServiceRequests.AgentSend(Text("agent"), Text("task"), Text("text")),
-            "agent.get" => Ma2aServiceRequests.AgentGet(Text("agent"), Text("task")),
-            "agent.tasks" => Ma2aServiceRequests.AgentTasks(Text("agent"), Optional("after")),
-            "agent.watch" => Ma2aServiceRequests.AgentWatch(Text("agent"), Text("task"), checked((uint)Number("after", 0))),
-            "agent.cancel" => Ma2aServiceRequests.AgentCancel(Text("agent"), Text("task")),
-            "agent.artifact" => Ma2aServiceRequests.AgentArtifact(Text("agent"), Text("task"), Text("name"), Number("offset", 0), arguments["identity"] as JsonArray),
-            "service.describe" => Ma2aServiceRequests.Describe(Optional("after")),
-            "service.call" => Ma2aServiceRequests.ServiceCall(Text("name"), checked((ushort)Number("version", 1)), Text("operation"), Convert.FromHexString(Text("hex"))),
-            "proxy.open" => Ma2aServiceRequests.Proxy(Text("host"), checked((ushort)Number("port", 0)), Number("idle_ms", 60_000)),
-            _ => throw new ArgumentException("Unknown native MA2A service operation.", nameof(operation)),
-        };
-        return new JsonObject { ["service"] = operation[..operation.IndexOf('.')], ["body"] = body };
+        if (!Builders.TryGetValue(operation, out var build))
+            throw new ArgumentException("Unknown native MA2A service operation.", nameof(operation));
+        return new JsonObject { ["service"] = operation[..operation.IndexOf('.')], ["body"] = build(new Arguments(arguments)) };
+    }
+
+    private readonly record struct Arguments(JsonObject Values)
+    {
+        public string Text(string name) => Optional(name) ?? throw new ArgumentException($"{name} is required.");
+        public string? Optional(string name) => Values[name]?.GetValue<string>();
+        public bool Flag(string name) => Values[name]?.GetValue<bool>() ?? false;
+        public ulong Number(string name, ulong fallback) => Values[name]?.GetValue<ulong>() ?? fallback;
+        public string[] Args() => Values["args"] is JsonArray items ? items.Select(item => item!.GetValue<string>()).ToArray() : [];
     }
 }

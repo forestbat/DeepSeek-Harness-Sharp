@@ -11,6 +11,16 @@ public static class Ma2aServiceRequests
     public const int MaximumAgentMessageBytes = 12_288;
     public const int MaximumHostedCallBodyBytes = 8_192;
     public const int MaximumHostedCallResultBytes = 60_000;
+    public const int MaximumInlineFileBytes = 65_536;
+    public const int MaximumProgramArgumentCount = 256;
+    public const int MaximumProgramTextBytes = 4096;
+    public const ulong DefaultExecTimeoutMilliseconds = 60_000;
+    public const ushort DefaultShellColumns = 80;
+    public const ushort DefaultShellRows = 24;
+    public const ulong DefaultProxyIdleMilliseconds = 60_000;
+    public const byte MaximumProcessSignal = 6;
+    public const uint MaximumProcessGraceMilliseconds = 60_000;
+    public const uint DefaultProcessGraceMilliseconds = 5_000;
     private const int MaximumRootNameBytes = 64;
     private const int MaximumPathComponents = 64;
     private const int MaximumPathComponentBytes = 255;
@@ -42,10 +52,10 @@ public static class Ma2aServiceRequests
     public static JsonArray Stat(string path) => new(0, Path(path));
     public static JsonArray List(string path, string? after = null) => new(1, Path(path), after);
     public static JsonArray Mkdir(string path, bool parents = false) => new(2, Path(path), parents);
-    public static JsonArray Read(string path, ulong offset = 0, uint length = 65_536)
-        => length <= 65_536 ? new(3, Path(path), offset, length) : throw new ArgumentOutOfRangeException(nameof(length));
+    public static JsonArray Read(string path, ulong offset = 0, uint length = MaximumInlineFileBytes)
+        => length <= MaximumInlineFileBytes ? new(3, Path(path), offset, length) : throw new ArgumentOutOfRangeException(nameof(length));
     public static JsonArray Write(string path, uint length, bool replace = false)
-        => length <= 65_536 ? new(4, Path(path), replace ? 1 : 0, length) : throw new ArgumentOutOfRangeException(nameof(length));
+        => length <= MaximumInlineFileBytes ? new(4, Path(path), replace ? 1 : 0, length) : throw new ArgumentOutOfRangeException(nameof(length));
     public static JsonArray Rename(string from, string to, bool replace = false) => new(5, Path(from), Path(to), replace);
     public static JsonArray Remove(string path, bool recursive = false) => new(6, Path(path), recursive);
 
@@ -63,26 +73,26 @@ public static class Ma2aServiceRequests
         if (program is not null) ValidateText(program);
         if (cwd is not null) ValidateText(cwd);
         args ??= [];
-        if (args.Count > 256) throw new ArgumentOutOfRangeException(nameof(args));
+        if (args.Count > MaximumProgramArgumentCount) throw new ArgumentOutOfRangeException(nameof(args));
         foreach (var argument in args) ValidateText(argument);
         return new JsonArray(program, new JsonArray(args.Select(argument => JsonValue.Create(argument)).ToArray()), cwd, new JsonArray());
     }
 
     private static void ValidateText(string value)
     {
-        if (Encoding.UTF8.GetByteCount(value) > 4096 || value.Contains('\0'))
+        if (Encoding.UTF8.GetByteCount(value) > MaximumProgramTextBytes || value.Contains('\0'))
             throw new ArgumentException("Program text exceeds its bound or contains NUL.", nameof(value));
     }
 
     public static JsonArray Exec(string program, IReadOnlyList<string>? args = null, string? cwd = null,
-        bool stdin = false, ulong timeoutMilliseconds = 60_000)
+        bool stdin = false, ulong timeoutMilliseconds = DefaultExecTimeoutMilliseconds)
     {
         ValidateLifetime(timeoutMilliseconds);
         return new JsonArray(Program(program, args, cwd), stdin, timeoutMilliseconds);
     }
 
     public static JsonArray Shell(string? program = null, IReadOnlyList<string>? args = null, string? cwd = null,
-        ushort columns = 80, ushort rows = 24, ulong lifetimeMilliseconds = MaximumLifetimeMilliseconds)
+        ushort columns = DefaultShellColumns, ushort rows = DefaultShellRows, ulong lifetimeMilliseconds = MaximumLifetimeMilliseconds)
     {
         ValidateLifetime(lifetimeMilliseconds);
         if (columns == 0 || rows == 0) throw new ArgumentOutOfRangeException(nameof(columns));
@@ -97,7 +107,7 @@ public static class Ma2aServiceRequests
     public static JsonArray Resize(ushort columns, ushort rows)
         => columns != 0 && rows != 0 ? new(0, new JsonArray(columns, rows)) : throw new ArgumentOutOfRangeException(nameof(columns));
 
-    public static JsonArray Proxy(string host, ushort port, ulong idleMilliseconds = 60_000)
+    public static JsonArray Proxy(string host, ushort port, ulong idleMilliseconds = DefaultProxyIdleMilliseconds)
         => port != 0 && idleMilliseconds is > 0 and <= 3_600_000
             ? new(host, port, idleMilliseconds) : throw new ArgumentOutOfRangeException(nameof(port));
 
@@ -115,9 +125,9 @@ public static class Ma2aServiceRequests
     public static JsonArray ProcessAttach(string id, ulong? cursor = null, bool stdin = false) => new(4, Id(id), LogPosition(cursor), stdin);
     public static JsonArray ProcessStdin(string id, bool close = false) => new(5, Id(id), close);
     public static JsonArray ProcessSignal(string id, byte signal)
-        => signal <= 6 ? new(6, Id(id), signal) : throw new ArgumentOutOfRangeException(nameof(signal));
-    public static JsonArray ProcessTerminate(string id, uint graceMilliseconds = 5_000)
-        => graceMilliseconds <= 60_000 ? new(7, Id(id), graceMilliseconds) : throw new ArgumentOutOfRangeException(nameof(graceMilliseconds));
+        => signal <= MaximumProcessSignal ? new(6, Id(id), signal) : throw new ArgumentOutOfRangeException(nameof(signal));
+    public static JsonArray ProcessTerminate(string id, uint graceMilliseconds = DefaultProcessGraceMilliseconds)
+        => graceMilliseconds <= MaximumProcessGraceMilliseconds ? new(7, Id(id), graceMilliseconds) : throw new ArgumentOutOfRangeException(nameof(graceMilliseconds));
     public static JsonArray ProcessDelete(string id) => new(8, Id(id));
     public static JsonArray LogPosition(ulong? cursor = null) => cursor is { } value ? new(2, value) : new(0);
     public static JsonArray LogNow() => new(1);

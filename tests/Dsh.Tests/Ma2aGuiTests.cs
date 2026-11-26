@@ -233,8 +233,12 @@ public sealed class Ma2aGuiTests
     public void FilesRead_PreservesTheNativeZeroLengthRequest()
     {
         var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == "files" && item.Name == "read");
+        var length = operation.Fields.Single(field => field.Name == "length");
         operation.Fields.Single(field => field.Name == "path").Text = "data:/file";
-        operation.Fields.Single(field => field.Name == "length").Number = 0;
+        Assert.Equal((ulong)Ma2aServiceRequests.MaximumInlineFileBytes, length.BuildValue()!.GetValue<ulong>());
+        length.Number = Ma2aServiceRequests.MaximumInlineFileBytes + 1;
+        Assert.Throws<InvalidOperationException>(() => length.BuildValue());
+        length.Number = 0;
         var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
 
         Assert.Equal(0U, operation.Build!(values)[3]!.GetValue<uint>());

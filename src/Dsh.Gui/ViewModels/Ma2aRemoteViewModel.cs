@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -289,8 +288,7 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
     private void AddResult(string label, JsonNode? value)
     {
         if (Results.Count >= MaximumResultEntries) Results.RemoveAt(0);
-        using var document = JsonDocument.Parse(value?.ToJsonString() ?? "null");
-        Results.Add(new Ma2aResultNode(label, Ma2aResultNode.ChildrenOf(document.RootElement)));
+        Results.Add(new Ma2aResultNode(label, Ma2aResultNode.ChildrenOf(value)));
     }
 
     private void Report(string message) => Dispatcher.UIThread.Post(() => Status = message);

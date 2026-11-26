@@ -28,7 +28,7 @@
         <Grid RowDefinitions="Auto,*" RowSpacing="12" Margin="0,12,0,0">
           <Expander Header="Runtime 生命周期（显式操作）">
             <StackPanel Spacing="8">
-              <TextBlock Text="关闭页面只解除附着。此处的停止与重启会影响 Runtime 上正在进行的工作。" TextWrapping="Wrap" />
+              <TextBlock Text="离开页面会暂停后台刷新。停止或重启 Runtime 会影响正在进行的工作。" TextWrapping="Wrap" />
               <TextBlock Text="MA2A 可执行程序" Classes="Secondary" />
               <TextBox Text="{Binding Executable, Mode=TwoWay}" AutomationProperties.Name="MA2A 可执行程序" />
               <CheckBox Content="我确认改变所选 Runtime 的生命周期" IsChecked="{Binding LifecycleConfirmed, Mode=TwoWay}" />
