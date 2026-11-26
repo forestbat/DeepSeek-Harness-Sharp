@@ -277,16 +277,18 @@ jobs:
           dotnet publish Dsh.GuiHost/Dsh.GuiHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
             -p:Version="$VERSION" -p:DebugSymbols=false -p:DebugType=none --nologo -v m
           # The Web entry keeps its runtime closure in a separate optional asset.
-          dotnet publish Dsh.WebHost/Dsh.WebHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
-            -p:Version="$VERSION" -p:DebugSymbols=false -p:DebugType=none --nologo -v m
-          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
-          if [ "$FLAVOR" = "aot" ]; then
-            bash scripts/assert-aot-output.sh "$WEB_PUB" dsharp-web
+          # 它不随 AOT 档: Web 入口作为 JSON-RPC 客户端要用 StreamJsonRpc 的运行时生成代理, NativeAOT 不支持。
+          if [ "$FLAVOR" != "aot" ]; then
+            dotnet publish Dsh.WebHost/Dsh.WebHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
+              -p:Version="$VERSION" -p:DebugSymbols=false -p:DebugType=none --nologo -v m
           fi
-          pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
-            -WebPublishDir "$WEB_PUB" \
-            -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish" \
-            -GuiPublishDir "Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
+          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
+          if [ -d "$WEB_PUB" ]; then
+            pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
+              -WebPublishDir "$WEB_PUB" \
+              -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish" \
+              -GuiPublishDir "Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
+          fi
           PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
           GUI_PUB="Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
           test -d "$PUB"
@@ -297,7 +299,7 @@ jobs:
           rm -rf "$STAGE"
           mkdir -p "$STAGE/plugins"
           cp -R "$PUB/." "$STAGE/"
-          for DISTRIBUTION in "$STAGE" "$WEB_PUB"; do
+          for DISTRIBUTION in "$STAGE" ${WEB_PUB:+"$WEB_PUB"}; do
             if find "$DISTRIBUTION" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
               echo "::error::Release products must not bundle the optional native Iroh command"
               exit 1
@@ -389,7 +391,9 @@ jobs:
           rm -rf "$VERIFY"
           echo "归档校验通过：$ARCHIVE"
 
+      # Web 入口只在 JIT 档产出: 它作为 JSON-RPC 客户端需要运行时生成代理, NativeAOT 不支持。
       - name: 单独打包和冒烟 WebHost
+        if: matrix.flavor != 'aot'
         shell: pwsh
         env:
           FLAVOR: ${{ matrix.flavor }}
@@ -416,6 +420,7 @@ jobs:
           } finally { Remove-Item $verify -Recurse -Force }
 
       - uses: actions/upload-artifact@v4
+        if: matrix.flavor != 'aot'
         with:
           name: web-${{ matrix.flavor }}-${{ matrix.rid }}
           path: artifacts/release-stage/dsharp-web-*

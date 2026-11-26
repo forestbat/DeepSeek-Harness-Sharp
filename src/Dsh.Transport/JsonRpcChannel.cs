@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using StreamJsonRpc;
 
 namespace Dsh.Transport;
@@ -62,8 +63,19 @@ public sealed class JsonRpcChannel : IDisposable
         return new JsonRpcChannel(rpc);
     }
 
-    /** 取契约接口的代理, 指向对端注册的那份实现。 */
-    public T Attach<T>() where T : class => _rpc.Attach<T>();
+    /**
+     * 取契约接口的代理, 指向对端注册的那份实现。
+     *
+     * StreamJsonRpc 的强类型代理是运行时生成的(Reflection.Emit), NativeAOT 下必然不可用。
+     * 那种情况下库只会抛一句 "CreateProxy is not supported if dynamic code is not supported",
+     * 从这里就能看出是"这个入口被编成了 AOT", 而不是协议或配置出错。
+     */
+    public T Attach<T>() where T : class
+        => RuntimeFeature.IsDynamicCodeSupported
+            ? _rpc.Attach<T>()
+            : throw new NotSupportedException(
+                $"transferring {typeof(T).Name} as a typed JSON-RPC proxy needs runtime code generation; "
+                + "this entry must be published as the JIT build, not NativeAOT");
 
     /** 按方法名调用(不带接口)。参数按位置序列化。 */
     public async Task<T> InvokeAsync<T>(string method, CancellationToken cancellationToken, params object?[] args)
