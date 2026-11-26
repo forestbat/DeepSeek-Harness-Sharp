@@ -37,6 +37,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
     private readonly Ma2aServiceResponseState _response;
     private readonly SemaphoreSlim _readGate = new(1, 1);
     private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly byte[] _writeHeader = new byte[HeaderLength + 1];
     private readonly HashSet<byte> _endedInputs = [];
     private readonly HashSet<byte> _endedOutputs = [];
     private bool _accepted;
@@ -189,6 +190,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
             throw new InvalidDataException("Unknown service status.");
     }
 
+    /// <summary>Sends data from the supplied memory, which must remain unchanged until the operation completes.</summary>
     public async Task SendDataAsync(byte channel, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken = default)
     {
         await _writeGate.WaitAsync(cancellationToken);
@@ -200,10 +202,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
             while (!bytes.IsEmpty)
             {
                 var count = Math.Min(bytes.Length, MaximumDataLength);
-                var payload = new byte[count + 1];
-                payload[0] = channel;
-                bytes[..count].CopyTo(payload.AsMemory(1));
-                await WriteFrameAsync(Ma2aFrameKind.Data, payload, cancellationToken);
+                await WriteFrameAsync(Ma2aFrameKind.Data, bytes[..count], cancellationToken, dataChannel: channel);
                 bytes = bytes[count..];
             }
         }
@@ -245,17 +244,20 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
         finally { _writeGate.Release(); }
     }
 
-    private async Task WriteFrameAsync(Ma2aFrameKind kind, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    private async Task WriteFrameAsync(Ma2aFrameKind kind, ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken, byte? dataChannel = null)
     {
-        ValidateLength(kind, payload.Length);
+        var channelLength = dataChannel.HasValue ? 1 : 0;
+        var payloadLength = payload.Length + channelLength;
+        ValidateLength(kind, payloadLength);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_terminal) throw new InvalidOperationException("The service operation has ended.");
-            var header = new byte[HeaderLength];
-            header[0] = (byte)kind;
-            BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(1), (uint)payload.Length);
-            await _stream.WriteAsync(header, cancellationToken);
+            _writeHeader[0] = (byte)kind;
+            BinaryPrimitives.WriteUInt32BigEndian(_writeHeader.AsSpan(1), (uint)payloadLength);
+            if (dataChannel is { } channel) _writeHeader[HeaderLength] = channel;
+            await _stream.WriteAsync(_writeHeader.AsMemory(0, HeaderLength + channelLength), cancellationToken);
             await _stream.WriteAsync(payload, cancellationToken);
             await _stream.FlushAsync(cancellationToken);
         }

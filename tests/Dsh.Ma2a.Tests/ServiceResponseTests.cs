@@ -201,6 +201,59 @@ public sealed class ServiceResponseTests
         }
     }
 
+    [Fact]
+    public async Task DataWritesPreserveBytesAcrossTheMaximumFrameBoundary()
+    {
+        const int tailLength = 3;
+        var data = new byte[Ma2aServiceSession.MaximumDataLength + tailLength];
+        new Random(0).NextBytes(data);
+        var (session, stream) = Create("service", Call(), Cbor(Ma2aFrameKind.Accept, Ma2aCbor.Bytes([])));
+        await using (session)
+        using (stream)
+        {
+            var cancellationToken = TestContext.Current.CancellationToken;
+            await session.ReadAsync(cancellationToken);
+            var start = stream.Position;
+            await session.SendDataAsync(0, data, cancellationToken);
+            await session.EndAsync(cancellationToken: cancellationToken);
+
+            stream.Position = start;
+            var first = await Ma2aServiceFraming.ReadAsync(stream, cancellationToken);
+            var tail = await Ma2aServiceFraming.ReadAsync(stream, cancellationToken);
+            var end = await Ma2aServiceFraming.ReadAsync(stream, cancellationToken);
+            Assert.Equal(Ma2aFrameKind.Data, first.Kind);
+            Assert.Equal((byte)0, first.Channel);
+            Assert.Equal(data[..Ma2aServiceSession.MaximumDataLength], first.Data.ToArray());
+            Assert.Equal(Ma2aFrameKind.Data, tail.Kind);
+            Assert.Equal((byte)0, tail.Channel);
+            Assert.Equal(data[^tailLength..], tail.Data.ToArray());
+            Assert.Equal(Ma2aFrameKind.End, end.Kind);
+            Assert.Equal((byte)0, end.Channel);
+            Assert.Equal(stream.Length, stream.Position);
+        }
+    }
+
+    [Fact]
+    public async Task CancellingInsideADataFrameClosesTheStreamBeforeAQueuedFrameCanWrite()
+    {
+        using var stream = new StalledDataWriteStream();
+        await using var session = Create(stream, "service", Call(), Cbor(Ma2aFrameKind.Accept, Ma2aCbor.Bytes([])));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await session.ReadAsync(cancellationToken);
+        var start = stream.Position;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var write = session.SendDataAsync(0, new byte[Ma2aServiceSession.MaximumDataLength], cancellation.Token);
+        Assert.Same(stream.DataWriteStarted.Task, await Task.WhenAny(stream.DataWriteStarted.Task, write).WaitAsync(cancellationToken));
+        var partialLength = stream.Position;
+        var end = session.EndAsync(cancellationToken: cancellationToken);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => write);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => end);
+        Assert.False(stream.CanWrite);
+        Assert.True(partialLength > start);
+        Assert.Equal(partialLength, stream.ToArray().LongLength);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -280,8 +333,13 @@ public sealed class ServiceResponseTests
 
     private static (Ma2aServiceSession Session, MemoryStream Stream) Create(string service, JsonNode request, params Ma2aServiceFrame[] frames)
     {
-        // Synthetic protocol boundary inputs exercise the production codec and session, without a replacement Runtime.
         var stream = new MemoryStream();
+        return (Create(stream, service, request, frames), stream);
+    }
+
+    private static Ma2aServiceSession Create(MemoryStream stream, string service, JsonNode request, params Ma2aServiceFrame[] frames)
+    {
+        // Synthetic protocol boundary inputs exercise the production codec and session, without a replacement Runtime.
         Span<byte> header = stackalloc byte[5];
         foreach (var frame in frames)
         {
@@ -291,7 +349,20 @@ public sealed class ServiceResponseTests
             stream.Write(frame.Payload.Span);
         }
         stream.Position = 0;
-        return (new Ma2aServiceSession(stream, service, request), stream);
+        return new Ma2aServiceSession(stream, service, request);
+    }
+
+    private sealed class StalledDataWriteStream : MemoryStream
+    {
+        public TaskCompletionSource DataWriteStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (buffer.Length < Ma2aServiceSession.MaximumDataLength)
+                return base.WriteAsync(buffer, cancellationToken);
+            DataWriteStarted.TrySetResult();
+            return new ValueTask(Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+        }
     }
 
     private static async Task DrainAsync(Ma2aServiceSession session)
