@@ -209,6 +209,49 @@ public sealed class EditorBridgeTests
     }
 
     [Fact(Timeout = 10000)]
+    public async Task EditorRetirementDuringUnregisterDoesNotFailTheRegistrationDisposal()
+    {
+        await using var core = await RemoteHostCapabilityTests.FakeBackend.CreateAsync(Ct);
+        using var clients = new EditorClientDispatcher();
+        var server = new RemoteHostServer(new("editor-test-token"), new Backend(core, new EditorBackend(new RecordingService(), clients, core.Files.Policy)));
+        await using var connection = await Connection.CreateAsync(server, Ct);
+        var started = NewSignal();
+        var cancelling = NewSignal();
+        var canFinish = NewSignal();
+        var local = new RecordingService(async (_, token) =>
+        {
+            started.TrySetResult();
+            try { await Task.Delay(Timeout.Infinite, token); return new EditorResult(); }
+            finally
+            {
+                cancelling.TrySetResult();
+                await canFinish.Task.WaitAsync(Ct);
+            }
+        });
+        await using var registration = await connection.Client.Editor.RegisterClientAsync(local, Ct, value => value);
+        await connection.Client.Editor.SelectForSessionAsync("unregister-race", Ct);
+        var request = new EditorRequest { WorkspaceRoot = core.Root, SessionId = "unregister-race", ExecutionTarget = EditorExecutionTarget.Client };
+        var open = clients.LaunchAsync(request, Ct).AsTask();
+        await started.Task.WaitAsync(Ct);
+
+        var unregister = registration.DisposeAsync().AsTask();
+        Task retirement;
+        try
+        {
+            await cancelling.Task.WaitAsync(Ct);
+            Assert.False(unregister.IsCompleted);
+            retirement = connection.Client.Editor.DisposeAsync().AsTask();
+            await unregister.WaitAsync(Ct);
+        }
+        finally { canFinish.TrySetResult(); }
+
+        await retirement.WaitAsync(Ct);
+        Assert.Equal(EditorErrorCode.CLIENT_UNAVAILABLE, (await open.WaitAsync(Ct)).Error);
+        Assert.Empty(clients.Clients);
+        Assert.True(await connection.Client.PingAsync(Ct) > 0);
+    }
+
+    [Fact(Timeout = 10000)]
     public async Task ReverseBridgeHonorsTheLocalLaunchersCurrentPermissionBeforeDetection()
     {
         await using var core = await RemoteHostCapabilityTests.FakeBackend.CreateAsync(TestContext.Current.CancellationToken);
