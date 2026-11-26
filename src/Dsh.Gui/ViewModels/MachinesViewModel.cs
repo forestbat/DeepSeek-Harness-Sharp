@@ -254,9 +254,9 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
         {
             if (!Current())
                 return;
-            // 远端拒绝过期修订时抛的是 RPC 层的 RemoteRpcException(错误码在 ErrorCode 上), 不是进程内的 JsonRpcException。
-            var revisionConflict = (error as StreamJsonRpc.RemoteRpcException)?.ErrorCode is { } code
-                && (int)code == NetworkProtocol.RevisionConflict;
+            var revisionConflict = error is JsonRpcException { Code: NetworkProtocol.RevisionConflict }
+                || ((error as StreamJsonRpc.RemoteRpcException)?.ErrorCode is { } code
+                    && (int)code == NetworkProtocol.RevisionConflict);
             if (!write || revisionConflict)
                 RemoteOutboundRequiresRefresh = true;
             RemoteOutboundStatus = OutboundProxy.Redact(
