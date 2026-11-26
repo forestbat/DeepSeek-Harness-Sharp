@@ -321,18 +321,26 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         MainViewModel? viewModel;
         Window? window;
         TemplateRegistration[] templates;
+        PageRegistration[]? pages;
+        int pageVersion;
         lock (_gate)
         {
             viewModel = _viewModel;
             window = _window;
             templates = window is null ? [] : [.. _templates];
+            // A page must be published against the same registration snapshot as its templates.
+            pageVersion = _pages.Version;
+            pages = viewModel is null || (ReferenceEquals(_appliedViewModel, viewModel) && _appliedPageVersion == pageVersion)
+                ? null
+                : _pages.Snapshot();
         }
         if (!ReferenceEquals(_appliedViewModel, viewModel))
             BindViewModel(viewModel);
         ApplyTemplates(window, templates);
         if (viewModel is not { IsDisposed: false })
             return;
-        ApplyPages(viewModel);
+        if (pages is not null)
+            ApplyPages(viewModel, pages, pageVersion);
         var shell = viewModel.CreateShellContext();
         ApplySlots(_toolbar, shell);
         ApplySlots(_settingsPanels, shell);
@@ -386,17 +394,8 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
                 window.DataTemplates.Add(registration.Wrapper);
     }
 
-    private void ApplyPages(MainViewModel viewModel)
+    private void ApplyPages(MainViewModel viewModel, PageRegistration[] effective, int version)
     {
-        PageRegistration[] effective;
-        int version;
-        lock (_gate)
-        {
-            version = _pages.Version;
-            if (_appliedPageVersion == version)
-                return;
-            effective = _pages.Snapshot();
-        }
         var ids = effective.Select(page => page.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var (id, previous) in _appliedPages.Where(item => !ids.Contains(item.Key)).ToArray())
         {

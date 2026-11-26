@@ -1,6 +1,9 @@
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
@@ -122,6 +125,72 @@ public sealed class PluginGuiExtensibilityTests
             Dispatcher.UIThread.RunJobs();
         }
     });
+
+    [Fact]
+    public async Task Workbench_BackgroundPageReplacementInstallsItsTemplateBeforePublishingContent() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+        try
+        {
+            window.Show();
+            var viewModel = window.ViewModel!;
+            var workspace = viewModel.Workspace;
+            var workbench = viewModel.Workbench;
+            const string pageId = "replacement-page";
+            using var original = workbench.RegisterPage(pageId, "Original", _ => new TextBlock { Text = "Original page" });
+            workspace.OpenPage(workspace.Pages.Available.Single(page => page.Id == pageId));
+            Render(window);
+
+            (IDisposable? Template, IDisposable? Page) replacement = default;
+            bool? publishedWithTemplate = null;
+            void ReplaceDuringTemplateUpdate(object? sender, NotifyCollectionChangedEventArgs change)
+            {
+                window.DataTemplates.CollectionChanged -= ReplaceDuringTemplateUpdate;
+                replacement = Task.Run(() =>
+                {
+                    var template = workbench.RegisterDataTemplate(new FuncDataTemplate<ReplacementPage>(
+                        (model, _) => new TextBlock { Text = model.Text }));
+                    var page = workbench.RegisterPage(pageId, "Replacement", _ => new ReplacementPage("Replacement page"));
+                    return (template, page);
+                }).WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken).GetAwaiter().GetResult();
+            }
+
+            void ObservePageContent(object? sender, PropertyChangedEventArgs change)
+            {
+                if (change.PropertyName == nameof(WorkspaceViewModel.PageContent) && workspace.PageContent is ReplacementPage replacementPage)
+                    publishedWithTemplate ??= window.DataTemplates.Any(template => template.Match(replacementPage));
+            }
+
+            window.DataTemplates.CollectionChanged += ReplaceDuringTemplateUpdate;
+            workspace.PropertyChanged += ObservePageContent;
+            try
+            {
+                // Add a window template while the worker replaces the active page and its template.
+                using var trigger = workbench.RegisterDataTemplate(new FuncDataTemplate<int>(
+                    (value, _) => new TextBlock { Text = value.ToString() }));
+                Render(window);
+                Assert.True(publishedWithTemplate, "The replacement reached the presenter before its data template.");
+                var host = window.FindControl<ContentControl>("WorkspacePageHost")!;
+                Assert.True(FindControlByText<TextBlock>(host, "Replacement page").IsEffectivelyVisible);
+            }
+            finally
+            {
+                window.DataTemplates.CollectionChanged -= ReplaceDuringTemplateUpdate;
+                workspace.PropertyChanged -= ObservePageContent;
+                replacement.Page?.Dispose();
+                replacement.Template?.Dispose();
+            }
+        }
+        finally
+        {
+            window.Close();
+            await window.ViewModel!.DisposeAsync();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    private sealed record ReplacementPage(string Text);
 
     private sealed class DisposablePage : StackPanel, IDisposable
     {
@@ -259,6 +328,7 @@ public sealed class PluginGuiExtensibilityTests
                 var v2Path = CompileGuiPlugin(artifacts.Root, "v2", "HotReloadSample", "@test/gui-reload", "v2");
                 var reloadResult = await hostFixture.Chat.RunAsync($"/plugins reload @test/gui-reload {v2Path}");
                 Assert.Contains("reloaded", reloadResult, StringComparison.Ordinal);
+                Assert.Contains("plugin @test/gui-reload activated", reloadResult, StringComparison.Ordinal);
                 Render(window);
 
                 Assert.Equal(AppPage.WorkspacePage, viewModel.Page);
