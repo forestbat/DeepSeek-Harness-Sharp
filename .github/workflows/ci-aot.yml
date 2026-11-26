@@ -32,9 +32,8 @@ jobs:
           - entry: gui
             project: Dsh.GuiHost/Dsh.GuiHost.csproj
             publish-root: Dsh.GuiHost/bin/Release/net11.0
-          - entry: web
-            project: Dsh.WebHost/Dsh.WebHost.csproj
-            publish-root: Dsh.WebHost/bin/Release/net11.0
+          # Web 入口不随 AOT 档发布: 它作为 JSON-RPC 客户端必须用 StreamJsonRpc 的运行时生成代理,
+          # 而 NativeAOT 不支持运行时代码生成(见 JsonRpcChannel.Attach 的显式守卫)。
     steps:
       - uses: actions/checkout@v4
         with:
@@ -155,7 +154,7 @@ jobs:
           merge-multiple: true
           path: artifacts
 
-      - name: Restore the three publish roots and cold native plugin fixture
+      - name: Restore the two publish roots and cold native plugin fixture
         shell: bash
         run: |
           set -euo pipefail
@@ -164,11 +163,10 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             TAR="$(cygpath -u "$WINDIR")/System32/tar.exe"
           fi
-          for ENTRY in cli gui web; do
+          for ENTRY in cli gui; do
             case "$ENTRY" in
               cli) PROJECT="DeepSeek-Harness-Sharp" ;;
               gui) PROJECT="Dsh.GuiHost" ;;
-              web) PROJECT="Dsh.WebHost" ;;
             esac
             ROOT="$PROJECT/bin/Release/net11.0/$RID/publish"
             mkdir -p "$ROOT"
@@ -181,15 +179,14 @@ jobs:
             test -f "$SAMPLE/Dsh.NativePluginSample.so"
           fi
 
-      - name: Assert NativeAOT output and smoke test the product's three entries
+      - name: Assert NativeAOT output and smoke test the product's AOT entries
         shell: bash
         run: |
           set -euo pipefail
           RID='${{ inputs.rid }}'
           PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
           GUI_PUB="Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
-          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
-          for OUTPUT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
+          for OUTPUT in "$PUB" "$GUI_PUB"; do
             if find "$OUTPUT" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
               echo "::error::NativeAOT products must not bundle the optional native Iroh command"
               exit 1
@@ -197,16 +194,11 @@ jobs:
           done
           bash scripts/assert-aot-output.sh "$PUB"
           bash scripts/assert-aot-output.sh "$GUI_PUB" dsh-gui
-          bash scripts/assert-aot-output.sh "$WEB_PUB" dsharp-web
-          for ROOT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
+          for ROOT in "$PUB" "$GUI_PUB"; do
             for NATIVE in dsh_plugin_guard dsh_fault_probe; do
               printf '%s\n' "$ROOT"/* | grep -E "/(lib)?$NATIVE\.(dll|so|dylib)$" || { echo "::error::AOT output is missing $NATIVE in $ROOT"; exit 1; }
             done
           done
-          pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
-            -WebPublishDir "$WEB_PUB" \
-            -TuiPublishDir "$PUB" \
-            -GuiPublishDir "$GUI_PUB"
           mkdir -p "$PUB/plugins"
           EXE="$PUB/dsharp"
           if [ ! -f "$EXE" ]; then
@@ -249,15 +241,14 @@ jobs:
           fi
           "$EXE" -noColor "${CLASSES[@]}"
 
-      - name: Archive the product's three complete publish roots
+      - name: Archive the product's AOT publish roots
         shell: bash
         run: |
           set -euo pipefail
           RID='${{ inputs.rid }}'
           PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
           GUI_PUB="Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
-          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
-          for ROOT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
+          for ROOT in "$PUB" "$GUI_PUB"; do
             test -d "$ROOT"
             rm -f "$ROOT"/*.pdb "$ROOT"/*.dbg
           done
@@ -269,7 +260,6 @@ jobs:
           # Archive each complete entry root before artifact upload changes Unix modes.
           "$TAR" -cf "artifacts/aot-$RID-cli.tar" -C "$PUB" .
           "$TAR" -cf "artifacts/aot-$RID-gui.tar" -C "$GUI_PUB" .
-          "$TAR" -cf "artifacts/aot-$RID-web.tar" -C "$WEB_PUB" .
 
       - uses: actions/upload-artifact@v4
         with:
