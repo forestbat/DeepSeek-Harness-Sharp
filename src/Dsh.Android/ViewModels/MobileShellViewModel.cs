@@ -118,7 +118,7 @@ public sealed partial class TimelineEntryViewModel : ObservableObject
 
     public string Label => $"#{Seq} {Clock}  {Text}";
 
-    /** 服务端的行格式是 "#<seq> <HH:mm:ss>  <预览>"; 别的形状一律不认, 免得把噪声当条目。 */
+    /// <summary>Parses a timeline entry formatted as <c>#&lt;seq&gt; &lt;HH:mm:ss&gt;  &lt;preview&gt;</c>.</summary>
     public static bool TryParse(string line, out TimelineEntryViewModel entry)
     {
         entry = null!;
