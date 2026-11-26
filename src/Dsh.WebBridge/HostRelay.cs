@@ -7,7 +7,6 @@ using Dsh.Fleet;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Transport;
-using StreamJsonRpc;
 
 namespace Dsh.WebBridge;
 
@@ -119,14 +118,13 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
             var result = await HandleAsync(request).ConfigureAwait(false);
             await SendAsync(new JsonRpcMessage { Id = request.Id, Result = result }, _lifetime.Token).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is JsonRpcException or RemoteRpcException or IOException or WebSocketException or InvalidOperationException or NotSupportedException or ArgumentException or JsonException or OperationCanceledException or ObjectDisposedException)
+        catch (Exception error) when (error is JsonRpcException or IOException or WebSocketException or InvalidOperationException or NotSupportedException or ArgumentException or JsonException or OperationCanceledException or ObjectDisposedException)
         {
             if (_lifetime.IsCancellationRequested)
                 return;
             try
             {
-                var code = error switch { JsonRpcException rpc => rpc.Code, RemoteRpcException { ErrorCode: { } remoteCode } => (int)remoteCode, _ => -32603 };
-                await SendAsync(new JsonRpcMessage { Id = request.Id, Error = new JsonRpcError { Code = code, Message = redact(error.Message) } }, _lifetime.Token).ConfigureAwait(false);
+                await SendAsync(new JsonRpcMessage { Id = request.Id, Error = new JsonRpcError { Code = error is JsonRpcException rpc ? rpc.Code : -32603, Message = redact(error.Message) } }, _lifetime.Token).ConfigureAwait(false);
             }
             catch (Exception ended) when (IsConnectionEnd(ended)) { }
         }

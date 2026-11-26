@@ -314,7 +314,7 @@ public sealed class RemoteHostMultiClientTests
         var accept = listener.AcceptTcpClientAsync(Ct);
         await socket.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port, Ct);
         using var accepted = await accept;
-        using var peer = JsonRpcChannel.Serve(accepted.GetStream(), HostRpcFormatter.CreateJson(), new JsonRpcTarget(RpcTargetMetadata.FromShape<IHostRpc>(), new HiddenCapabilityRelay(upstream)));
+        using var peer = JsonRpcChannel.Serve(accepted.GetStream(), HostRpcFormatter.CreateJson(), new HiddenCapabilityRelay(upstream));
         await using var client = await RemoteHostClient.ConnectAsync(socket.GetStream(), cancellationToken: Ct);
         var approval = RaiseApprovalAsync(host, host.Environment.Agent, "write");
         var question = AskQuestionAsync(host, host.Environment.Agent);

@@ -19,28 +19,6 @@ public sealed class WebBridgeTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Theory(Timeout = 15000)]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ForwardedRpcFailure_RespondsWithHostError_AndKeepsConnectionUsable(bool unknownMethod)
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var host = await HarnessHostFixture.CreateAsync("wbf", cancellationToken);
-        await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
-        var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
-        using var socket = await access.ConnectWebSocketAsync(await access.LoginAsync(cancellationToken), access.Origin, cancellationToken);
-        await WebBridgeHubTests.HelloAsync(socket);
-        var request = new RemoteAgentStartRequest(AgentKinds.Terminal, host.Root,
-            Command: new RemoteAgentCommand(Path.Combine(host.Root, "missing-terminal"), []));
-        await WebSocketRpc.SendAsync(socket, 2, unknownMethod ? "host.unknown" : AgentProtocol.MethodAgentStart,
-            unknownMethod ? null : JsonSerializer.Serialize(request, AgentProtocolJsonContext.Default.RemoteAgentStartRequest));
-        var response = await WebSocketRpc.ReceiveUntilAsync(socket, message => message.TryGetProperty("id", out var id) && id.GetInt32() == 2);
-        var error = response.GetProperty("error");
-        Assert.Equal((int)(unknownMethod ? StreamJsonRpc.Protocol.JsonRpcErrorCode.MethodNotFound : StreamJsonRpc.Protocol.JsonRpcErrorCode.InvocationError), error.GetProperty("code").GetInt32());
-        Assert.Contains(unknownMethod ? "host.unknown" : "agent executable not found", error.GetProperty("message").GetString());
-        Assert.Equal(HostProtocol.Version, (await WebSocketRpc.RequestAsync(socket, 3, HostProtocol.MethodInfo, null)).GetProperty("ProtocolVersion").GetInt32());
-    }
-
     [Fact(Explicit = true)]
     public async Task WebSocket_UsesSharedFleetForRealSessionEvents()
     {

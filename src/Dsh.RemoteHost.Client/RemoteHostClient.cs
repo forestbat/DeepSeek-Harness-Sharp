@@ -96,7 +96,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         RemoteHostClient? client = null;
         var target = new ClientTarget();
         var channel = JsonRpcChannel.Connect(duplex, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default),
-            contracts: [new(RpcTargetMetadata.FromShape<IHostPush>(), target)], methods: target.Methods());
+            [target], target.Methods());
         try
         {
             client = new RemoteHostClient(channel);

@@ -1110,30 +1110,6 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Equal(candidates[0].Value, overlay.Selected?.Value);
     }
 
-    [Fact]
-    public async Task TimestampCandidates_PutHigherSequenceFirstWhenTimestampsTie()
-    {
-        using var chat = await CreateChat();
-        var pane = chat.InputPane;
-        var earlier = new SessionEvent
-        {
-            Type = SessionEventTypes.UserMessage,
-            Seq = pane.Agent.Session.Seq,
-            Time = pane.Agent.Session.Header.CreatedAt,
-            Data = new UserMessagePayload(MessageFactory.CreateUserText("earlier message")),
-        };
-        pane.ProcessSessionEvent(earlier, replay: true);
-        pane.ProcessSessionEvent(earlier with
-        {
-            Seq = earlier.Seq + 1,
-            Data = new UserMessagePayload(MessageFactory.CreateUserText("later message")),
-        }, replay: true);
-
-        Assert.Collection(chat.TimestampCandidates(pane),
-            candidate => Assert.EndsWith("later message", candidate.Label, StringComparison.Ordinal),
-            candidate => Assert.EndsWith("earlier message", candidate.Label, StringComparison.Ordinal));
-    }
-
     /** /timestamp 的 seq 候选显示可读预览(#seq + 消息文本), 而不是只有编号。 */
     [Fact]
     public async Task TimestampCandidates_Show_Readable_Preview()

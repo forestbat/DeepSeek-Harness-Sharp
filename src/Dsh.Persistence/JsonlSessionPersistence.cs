@@ -1000,7 +1000,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         {
             // 票文件读不到只是这一次, 不要把裸 IO 异常扔进回合里。
             throw new SessionWriteBusyException(Environment.ProcessId,
-                $"the write ticket could not be updated ({error.GetType().Name}); retrying on the next write", error);
+                $"the write ticket could not be read ({error.GetType().Name}); retrying on the next write");
         }
     }
 

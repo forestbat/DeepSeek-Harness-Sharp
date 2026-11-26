@@ -62,7 +62,7 @@ public sealed class FleetBootstrapTests
         var preamble = new byte[LocalEndpointToken.ValueLength];
         await stream.ReadExactlyAsync(preamble, cancellationToken);
         Assert.True(token.Matches(Encoding.UTF8.GetString(preamble)));
-        using var peer = JsonRpcChannel.Serve(stream, HostRpcFormatter.CreateJson(), new JsonRpcTarget(RpcTargetMetadata.FromShape<IHostRpc>(), new MetadataOnlyEndpoint(root)));
+        using var peer = JsonRpcChannel.Serve(stream, HostRpcFormatter.CreateJson(), new MetadataOnlyEndpoint(root));
         try { await peer.Completion.WaitAsync(cancellationToken); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }

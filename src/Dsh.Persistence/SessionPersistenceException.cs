@@ -88,8 +88,8 @@ public sealed class SessionNumberStaleException(long startSeq, long got) : Sessi
  *
  * 正确反应是"这一次先别写, 下次再试": 票有明确的到期时刻, 到期它自己就失效, 不需要任何人判死。
  */
-public sealed class SessionWriteBusyException(int pid, string message, Exception? innerException = null)
-    : SessionPersistenceException($"session write ticket is held by pid {pid}: {message}", innerException)
+public sealed class SessionWriteBusyException(int pid, string message)
+    : SessionPersistenceException($"session write ticket is held by pid {pid}: {message}")
 {
     public override string Code => SessionErrorCodes.WriteBusy;
 }
