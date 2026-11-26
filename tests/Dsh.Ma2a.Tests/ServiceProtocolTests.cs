@@ -36,9 +36,18 @@ public sealed class ServiceProtocolTests
     [Theory]
     [InlineData("-1")]
     [InlineData("1.5")]
+    [InlineData("1.0")]
+    [InlineData("1e0")]
     [InlineData("18446744073709551616")]
     public void NonUnsignedJsonNumbersRemainInvalidServiceScalars(string json)
         => Assert.Throws<FormatException>(() => Ma2aCbor.Encode(JsonNode.Parse(json)));
+
+    [Fact]
+    public void NonUnsignedConstructedNumbersRemainInvalidServiceScalars()
+    {
+        Assert.Throws<FormatException>(() => Ma2aCbor.Encode(JsonValue.Create(-1L)));
+        Assert.Throws<FormatException>(() => Ma2aCbor.Encode(JsonValue.Create(1.5m)));
+    }
 
     [Fact]
     public void NativeTerminationPreservesTheUnsignedExitCodeBitPattern()

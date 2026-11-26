@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Formats.Cbor;
 using System.Globalization;
 using System.Text.Json;
@@ -15,7 +16,9 @@ public static class Ma2aCbor
     public static byte[] Encode(JsonNode? value)
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
-        Write(writer, value, 0);
+        var scalarBuffer = new ArrayBufferWriter<byte>();
+        using var scalarWriter = new Utf8JsonWriter(scalarBuffer);
+        Write(writer, value, 0, scalarWriter, scalarBuffer);
         return writer.Encode();
     }
 
@@ -28,7 +31,8 @@ public static class Ma2aCbor
         return value;
     }
 
-    private static void Write(CborWriter writer, JsonNode? node, int depth)
+    private static void Write(CborWriter writer, JsonNode? node, int depth,
+        Utf8JsonWriter scalarWriter, ArrayBufferWriter<byte> scalarBuffer)
     {
         if (depth > MaximumDepth)
             throw new InvalidDataException("Service CBOR nesting exceeds its bound.");
@@ -37,16 +41,17 @@ public static class Ma2aCbor
             case null: writer.WriteNull(); break;
             case JsonArray array:
                 writer.WriteStartArray(array.Count);
-                foreach (var item in array) Write(writer, item, depth + 1);
+                foreach (var item in array) Write(writer, item, depth + 1, scalarWriter, scalarBuffer);
                 writer.WriteEndArray();
                 break;
-            case JsonObject map: WriteMap(writer, map, depth); break;
-            case JsonValue scalar: WriteScalar(writer, scalar); break;
+            case JsonObject map: WriteMap(writer, map, depth, scalarWriter, scalarBuffer); break;
+            case JsonValue scalar: WriteScalar(writer, scalar, scalarWriter, scalarBuffer); break;
             default: throw new InvalidDataException("Unsupported service CBOR value.");
         }
     }
 
-    private static void WriteMap(CborWriter writer, JsonObject map, int depth)
+    private static void WriteMap(CborWriter writer, JsonObject map, int depth,
+        Utf8JsonWriter scalarWriter, ArrayBufferWriter<byte> scalarBuffer)
     {
         if (map.Count == 1 && map.TryGetPropertyValue("$bytes", out var bytes))
         {
@@ -60,23 +65,32 @@ public static class Ma2aCbor
         foreach (var key in keys)
         {
             writer.WriteUInt64(key);
-            Write(writer, map[key.ToString(CultureInfo.InvariantCulture)], depth + 1);
+            Write(writer, map[key.ToString(CultureInfo.InvariantCulture)], depth + 1, scalarWriter, scalarBuffer);
         }
         writer.WriteEndMap();
     }
 
-    private static void WriteScalar(CborWriter writer, JsonValue value)
+    private static void WriteScalar(CborWriter writer, JsonValue value,
+        Utf8JsonWriter scalarWriter, ArrayBufferWriter<byte> scalarBuffer)
     {
-        using var document = JsonDocument.Parse(value.ToJsonString());
-        var element = document.RootElement;
-        switch (element.ValueKind)
+        // Read the JSON representation so custom converters and number spellings retain their meaning.
+        scalarWriter.Reset();
+        scalarBuffer.ResetWrittenCount();
+        value.WriteTo(scalarWriter);
+        scalarWriter.Flush();
+        var reader = new Utf8JsonReader(scalarBuffer.WrittenSpan);
+        if (!reader.Read())
+            throw new JsonException("The service value did not serialize to JSON.");
+        switch (reader.TokenType)
         {
-            case JsonValueKind.String: writer.WriteTextString(element.GetString()!); break;
-            case JsonValueKind.True: writer.WriteBoolean(true); break;
-            case JsonValueKind.False: writer.WriteBoolean(false); break;
-            case JsonValueKind.Number: writer.WriteUInt64(element.GetUInt64()); break;
+            case JsonTokenType.String: writer.WriteTextString(reader.GetString()!); break;
+            case JsonTokenType.True: writer.WriteBoolean(true); break;
+            case JsonTokenType.False: writer.WriteBoolean(false); break;
+            case JsonTokenType.Number: writer.WriteUInt64(reader.GetUInt64()); break;
             default: throw new InvalidDataException("Service values require unsigned integers, strings, booleans or null.");
         }
+        if (reader.BytesConsumed != scalarBuffer.WrittenCount && reader.Read())
+            throw new JsonException("The service value did not serialize to a single JSON scalar.");
     }
 
     private static JsonNode? Read(CborReader reader, int depth)
