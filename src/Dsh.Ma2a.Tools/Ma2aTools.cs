@@ -38,7 +38,7 @@ public sealed class Ma2aTools : IDisposable
         _registrations.Add(tools.Register(Define("ma2a_stream_open", "Open a native MA2A service session. Body follows the service protocol; encode binary values as {\"$bytes\":\"lowercasehex\"}. Read until the terminal outcome, then close. Cancellation or early close may leave an unknown outcome.",
             """{"state_directory":{"type":"string"},"target":{"type":"string"},"service":{"type":"string","enum":["files","transfer","exec","shell","proxy","process","agent","service"]},"request_id":{"type":"string"},"body":{}}""",
             ["state_directory", "target", "service", "request_id", "body"], OpenAsync)));
-        _registrations.Add(tools.Register(Define("ma2a_stream_read", "Wait for the next native service frame. Binary data is returned as hexadecimal. A terminal outcome is authoritative; events alone do not prove completion.",
+        _registrations.Add(tools.Register(Define("ma2a_stream_read", "Wait for the next native service frame. Data frames return channel and data_hex. A terminal outcome is authoritative; events alone do not prove completion.",
             """{"handle":{"type":"string"}}""", ["handle"], ReadAsync)));
         _registrations.Add(tools.Register(Define("ma2a_stream_write", "Send data, end, control or cancel on an open native service session. Data uses hexadecimal bytes, not text conversion.",
             """{"handle":{"type":"string"},"kind":{"type":"string","enum":["data","end","control","cancel"]},"channel":{"type":"integer","minimum":0,"maximum":255},"hex":{"type":"string","description":"Raw data or Hosted Service control bytes in hexadecimal."},"control":{}}""",
@@ -114,7 +114,8 @@ public sealed class Ma2aTools : IDisposable
             var frame = await session.ReadAsync(execution.Signal);
             var result = new
             {
-                kind = frame.Kind.ToString(), payload_hex = Convert.ToHexStringLower(frame.Payload.Span),
+                kind = frame.Kind.ToString(),
+                payload_hex = frame.Kind == Ma2aFrameKind.Data ? null : Convert.ToHexStringLower(frame.Payload.Span),
                 channel = frame.Kind is Ma2aFrameKind.Data or Ma2aFrameKind.End ? (byte?)frame.Channel : null,
                 data_hex = frame.Kind == Ma2aFrameKind.Data ? Convert.ToHexStringLower(frame.Data.Span) : null,
                 cbor = frame.Kind is Ma2aFrameKind.Accept or Ma2aFrameKind.Outcome

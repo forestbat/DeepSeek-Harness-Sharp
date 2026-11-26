@@ -43,16 +43,28 @@ internal static class ToolScenarios
     private static async Task OwnerAndTerminalAsync(ToolRuntime runtime, AgentLoopAgent owner, AgentLoopAgent other,
         NativeRuntimePair pair, CancellationToken cancellationToken)
     {
-        var handle = await OpenPreparedAsync(runtime, owner, pair, "files.stat", new JsonObject { ["path"] = "data:/" }, cancellationToken);
+        byte[] expected = [0, 1, 127, 128, 255];
+        const string fileName = "tool-read-bytes.bin";
+        await File.WriteAllBytesAsync(Path.Combine(pair.Root, "files", fileName), expected, cancellationToken);
+        var handle = await OpenPreparedAsync(runtime, owner, pair, "files.read", new JsonObject { ["path"] = $"data:/{fileName}" }, cancellationToken);
         var wrongOwner = await ExecuteAsync(runtime, other, "ma2a_stream_read", Handle(handle), cancellationToken);
         NativeRuntimePair.Check(wrongOwner.IsError, "A second DSH session cannot read the first session's native service handle.");
+        var received = new List<byte>();
         JsonElement frame;
-        do { frame = Success(await ExecuteAsync(runtime, owner, "ma2a_stream_read", Handle(handle), cancellationToken)); }
+        do
+        {
+            frame = Success(await ExecuteAsync(runtime, owner, "ma2a_stream_read", Handle(handle), cancellationToken));
+            if (frame.GetProperty("kind").GetString() != "Data") continue;
+            NativeRuntimePair.Check(!frame.TryGetProperty("payload_hex", out var payload) || payload.ValueKind == JsonValueKind.Null,
+                "The tool must expose data bytes only once.");
+            received.AddRange(Convert.FromHexString(frame.GetProperty("data_hex").GetString()!));
+        }
         while (frame.GetProperty("kind").GetString() != "Outcome");
+        NativeRuntimePair.Check(received.SequenceEqual(expected), "The tool must preserve the file's bytes exactly.");
         var ended = await ExecuteAsync(runtime, owner, "ma2a_stream_read", Handle(handle), cancellationToken);
         NativeRuntimePair.Check(ended.IsError, "Reading the terminal outcome automatically removes the native handle.");
         Success(await ExecuteAsync(runtime, owner, "ma2a_stream_close", Handle(handle), cancellationToken));
-        await NativeRuntimePair.PassedAsync("Actual DSH ToolRuntime native request preparation, cross-session handle rejection, terminal release and idempotent close.");
+        await NativeRuntimePair.PassedAsync("Actual DSH ToolRuntime delivers native bytes once, rejects cross-session access, releases on terminal outcome and closes idempotently.");
     }
 
     private static async Task CancelledReadsAsync(ToolRuntime runtime, AgentLoopAgent owner, NativeRuntimePair pair, CancellationToken cancellationToken)
