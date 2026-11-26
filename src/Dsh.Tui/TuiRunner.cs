@@ -166,7 +166,11 @@ public static class TuiRunner
     private static async Task<int> RunInteractiveAsync(HarnessApp app, AgentLoopAgent agent, bool startShell = false)
     {
         SetConsoleInteractive(true);
-        using var inputSource = CreateInputSource();
+        using var inputSource = CreateInputSource(app);
+        // 只有字节型输入源才让终端编码修饰键(Shift+Enter 才可能与 Enter 区分); 退出时必须复位。
+        var usesModifiedKeyModes = inputSource is { DecodesEscapeSequences: true };
+        if (usesModifiedKeyModes)
+            await WriteTerminalModesAsync(TerminalInputModes.Enable);
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(DefaultColumns, DefaultRows);
         var forceFull = true;
@@ -269,12 +273,32 @@ public static class TuiRunner
         }
         finally
         {
+            if (usesModifiedKeyModes)
+                await WriteTerminalModesAsync(TerminalInputModes.Disable);
             SetConsoleInteractive(false);
         }
 
         var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         await sessions.Flush(agent.Session);
         return 0;
+    }
+
+    /** 写终端输入模式序列: 输出被重定向时什么都没得写, 那不是错误。 */
+    private static async Task WriteTerminalModesAsync(string sequence)
+    {
+        try
+        {
+            if (Console.IsOutputRedirected)
+                return;
+            await Console.Out.WriteAsync(sequence);
+            await Console.Out.FlushAsync();
+        }
+        catch (IOException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private static void DispatchInput(ChatWindow chat, TerminalInputEvent inputEvent, UiLayout layout)
@@ -314,13 +338,29 @@ public static class TuiRunner
     }
 
     /**
-     * 输入源按平台选择: Unix 原始字节 + SGR 鼠标, Windows 控制台输入记录(ReadConsoleInputW)。
-     * 句柄不可用时返回 null, 调用方回退到 Console.ReadKey(无鼠标)。
+     * 输入源选择:
+     *   1) Windows 优先用 daemon 的输入旁路(原始终端字节) —— 控制台记录那条路拿不到修饰键编码与括号粘贴标记(见 DaemonInputReader);
+     *   2) 拿不到旁路(老 daemon、或不是 daemon 托管的会话)时 Windows 退回控制台记录, Unix 用 fd 0 原始读;
+     *   3) 都不行时返回 null, 调用方退回 Console.ReadKey(无鼠标)。
      */
-    private static ITerminalInputSource? CreateInputSource()
-        => OperatingSystem.IsWindows()
-            ? WindowsConsoleInputReader.TryCreate()
-            : new TerminalInputReader();
+    private static ITerminalInputSource? CreateInputSource(HarnessApp app)
+    {
+        var logger = app.Ctx.LoggerFor("tui");
+        if (OperatingSystem.IsWindows())
+        {
+            if (DaemonInputReader.TryOpen(out var daemon, out var reason))
+            {
+                logger.Info("terminal input: daemon byte channel");
+                return daemon;
+            }
+
+            // 退回记录路径意味着 Shift+Enter 与括号粘贴在这台机器上退化成旧行为(旧 daemon 不支持旁路), 值得留一条可查的日志。
+            logger.Warn($"terminal input: daemon byte channel unavailable ({reason}); falling back to console records");
+            return WindowsConsoleInputReader.TryCreate();
+        }
+
+        return new TerminalInputReader();
+    }
 
     private static int RunGpuSync(
         HarnessApp app,
@@ -485,3 +525,4 @@ public static class TuiRunner
         }
     }
 }
+

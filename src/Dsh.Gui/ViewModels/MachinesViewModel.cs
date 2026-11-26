@@ -250,11 +250,14 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
             }
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException
-            or ArgumentException or JsonRpcException or UnauthorizedAccessException)
+            or ArgumentException or JsonRpcException or StreamJsonRpc.RemoteRpcException or UnauthorizedAccessException)
         {
             if (!Current())
                 return;
-            if (!write || error is JsonRpcException { Code: NetworkProtocol.RevisionConflict })
+            // 远端拒绝过期修订时抛的是 RPC 层的 RemoteRpcException(错误码在 ErrorCode 上), 不是进程内的 JsonRpcException。
+            var revisionConflict = (error as StreamJsonRpc.RemoteRpcException)?.ErrorCode is { } code
+                && (int)code == NetworkProtocol.RevisionConflict;
+            if (!write || revisionConflict)
                 RemoteOutboundRequiresRefresh = true;
             RemoteOutboundStatus = OutboundProxy.Redact(
                 $"{error.Message} The draft was retained; use Read / Refresh to load the actual target Host settings.",

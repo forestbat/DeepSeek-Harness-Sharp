@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
@@ -37,7 +38,10 @@ public sealed class MarkdownView : UserControl
     private const string DefaultCodeLanguage = "code";
     private const string MonoFontFallback = "Consolas, monospace";
 
-    // The fallback survives headless dispatcher replacement, so it must not retain dispatcher affinity.
+    /**
+     * 静态画刷用不可变实现: SolidColorBrush 带线程归属, 放进 static 字段就等于把"第一次用到它的那个 Dispatcher"
+     * 钉死, 之后在别的 UI 线程上读它(例如把它格式化进字符串)会抛"calling thread cannot access this object"。
+     */
     private static readonly IBrush TranslucentGray = new ImmutableSolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
     private static readonly InlineDelimiter[] InlineDelimiters =
     [
@@ -118,17 +122,31 @@ public sealed class MarkdownView : UserControl
 
     private bool ApplyTheme()
     {
+        var previousSignature = _themeSignature;
         _primaryBrush = ResolveBrush("Brush.Text.Primary", IsDark ? Brushes.White : Brushes.Black);
         _secondaryBrush = ResolveBrush("Brush.Text.Secondary", IsDark ? Brushes.Silver : Brushes.DimGray);
         _codeBackground = ResolveBrush("Brush.Bg.Inset", TranslucentGray);
         _monoFont = LookupResource("Font.Mono") as FontFamily ?? FontFamily.Parse(MonoFontFallback);
         _fontScale = ResolveFontSize("FontSize.Body", BodyFontSize) / BodyFontSize;
-        var signature = $"{_primaryBrush}|{_secondaryBrush}|{_codeBackground}|{_monoFont}|{_fontScale}";
-        if (string.Equals(signature, _themeSignature, StringComparison.Ordinal))
-            return false;
-        _themeSignature = signature;
-        return true;
+        _themeSignature = ThemeSignature();
+        return !string.Equals(_themeSignature, previousSignature, StringComparison.Ordinal);
     }
+
+    /**
+     * 主题签名的取值方式必须是**跨线程安全**的。
+     *
+     * 早先这里把画刷直接格式化进插值字符串: SolidColorBrush.ToString() 会做线程归属校验,
+     * 因此只要有一支画刷属于别的 Dispatcher(资源里换成可变画刷就会这样), 这里就抛异常。
+     * 签名只用来回答"主题相关状态变了没", 用主题变体 + 资源命中情况 + 字体与字号就够了。
+     */
+    private string ThemeSignature()
+        => string.Join('|',
+            ActualThemeVariant?.ToString() ?? "-",
+            LookupResource("Brush.Text.Primary") is null ? "0" : "1",
+            LookupResource("Brush.Text.Secondary") is null ? "0" : "1",
+            LookupResource("Brush.Bg.Inset") is null ? "0" : "1",
+            _monoFont.ToString(),
+            _fontScale.ToString(CultureInfo.InvariantCulture));
 
     private double BodySize => BodyFontSize * _fontScale;
 

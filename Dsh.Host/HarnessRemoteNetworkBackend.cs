@@ -5,6 +5,7 @@ using Dsh.Core;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
 using Dsh.Transport;
+using StreamJsonRpc;
 
 namespace Dsh.Host;
 
@@ -32,8 +33,13 @@ internal sealed class HarnessRemoteNetworkBackend(HarnessHome home, OutboundProx
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // 修订冲突必须带错误码过线: 只有 LocalRpcException 的 ErrorCode 会被 StreamJsonRpc 透传,
+            // 换成其它异常类型就退化成通用的 InvocationError, 客户端只能看到一句话、分不出这是冲突。
             if (!string.Equals(request.ExpectedRevision, ReadState().Revision, StringComparison.Ordinal))
-                throw new JsonRpcException(NetworkProtocol.RevisionConflict, "outbound proxy settings changed; reload before saving");
+                throw new LocalRpcException("outbound proxy settings changed; reload before saving")
+                {
+                    ErrorCode = NetworkProtocol.RevisionConflict,
+                };
             cancellationToken.ThrowIfCancellationRequested();
             HarnessSettings.SaveOutboundProxy(home, ToLocalSettings(request.Settings), proxy);
             return ReadState();

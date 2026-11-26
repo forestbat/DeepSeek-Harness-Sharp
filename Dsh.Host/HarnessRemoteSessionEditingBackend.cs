@@ -8,7 +8,7 @@ using Dsh.Sdk;
 namespace Dsh.Host;
 
 /** Commands, persisted session mutations and subagent inspection. */
-internal sealed class HarnessRemoteSessionEditingBackend(HarnessRemoteRuntime runtime, IRemoteAgentBackend agents) : IRemoteSessionEditingBackend
+internal sealed class HarnessRemoteSessionEditingBackend(HarnessRemoteRuntime runtime, IRemoteAgentBackend agents, HostPtySessions ptys) : IRemoteSessionEditingBackend
 {
     public async Task<RemoteCommandResult> ExecuteSessionCommandAsync(string sessionId, string line, CancellationToken cancellationToken)
     {
@@ -42,10 +42,22 @@ internal sealed class HarnessRemoteSessionEditingBackend(HarnessRemoteRuntime ru
         return Task.CompletedTask;
     }
 
+    /**
+     * 会话整条消失: 先结束它的进程, 再删日志与登记。
+     * 终端类会话的 PTY 由 daemon 持有, 删除时要连启动记录一起丢掉 —— 只删登记的话, 它还能被重新列出来或按记录复活。
+     */
     public async Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken)
     {
-        if (runtime.Sessions.Get(sessionId) is not null)
-            await agents.StopAgentAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        switch (runtime.Sessions.Get(sessionId)?.Kind)
+        {
+            case HostSessionKinds.Terminal:
+            case HostSessionKinds.External:
+                await ptys.DeleteAsync(sessionId, cancellationToken).ConfigureAwait(false);
+                break;
+            case not null:
+                await agents.StopAgentAsync(sessionId, cancellationToken).ConfigureAwait(false);
+                break;
+        }
         (runtime.Persistence ?? throw new InvalidOperationException("session persistence is unavailable")).Delete(SessionId.Create(sessionId));
         runtime.Sessions.Remove(sessionId);
     }

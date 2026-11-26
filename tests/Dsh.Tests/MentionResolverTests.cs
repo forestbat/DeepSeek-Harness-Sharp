@@ -68,31 +68,30 @@ public class MentionResolverTests
         Assert.Equal(["session-1", "session-file.txt"], candidates);
     }
 
+    /** 文件引用不展开正文: 正文进了用户消息就成了几十 KB 的不可回收文本(压缩要重写它, 尾部被它占满)。 */
     [Fact]
-    public void ExpandMentions_Expands_File_Content()
+    public void ExpandMentions_Keeps_File_Reference_Without_Content()
     {
         using var temp = new TempDir();
         File.WriteAllText(Path.Combine(temp.Path, "note.txt"), "hello world");
 
-        var expanded = MentionResolver.ExpandMentions("see @note.txt", temp.Path, []);
+        var expanded = MentionResolver.ExpandMentions("see @note.txt", []);
 
-        Assert.Contains("[file: note.txt]", expanded);
-        Assert.Contains("hello world", expanded);
+        Assert.Equal("see @note.txt", expanded);
+        Assert.DoesNotContain("hello world", expanded);
     }
 
     [Fact]
-    public void ExpandMentions_Expands_Directory_Listing()
+    public void ExpandMentions_Keeps_Directory_Reference_Without_Listing()
     {
         using var temp = new TempDir();
         var docs = Directory.CreateDirectory(Path.Combine(temp.Path, "docs"));
         File.WriteAllText(Path.Combine(docs.FullName, "a.md"), "a");
         File.WriteAllText(Path.Combine(docs.FullName, "b.md"), "b");
 
-        var expanded = MentionResolver.ExpandMentions("list @docs", temp.Path, []);
+        var expanded = MentionResolver.ExpandMentions("list @docs", []);
 
-        Assert.Contains("[directory: docs]", expanded);
-        Assert.Contains("docs/a.md", expanded);
-        Assert.Contains("docs/b.md", expanded);
+        Assert.Equal("list @docs", expanded);
     }
 
     [Fact]
@@ -115,7 +114,7 @@ public class MentionResolverTests
     {
         MentionSessionInfo[] sessions = [new("session-1", "Alpha", "first session summary")];
 
-        var expanded = MentionResolver.ExpandMentions("see @session-1", "/tmp", sessions);
+        var expanded = MentionResolver.ExpandMentions("see @session-1", sessions);
 
         Assert.Contains("session-1", expanded);
         Assert.Contains("first session summary", expanded);

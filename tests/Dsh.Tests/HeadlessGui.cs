@@ -12,6 +12,15 @@ internal static class HeadlessGui
      */
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(45);
 
+    /**
+     * 跑在 HeadlessGui 里的用例可以挂在 [Fact(Timeout = ...)] 上的看门狗。
+     *
+     * 必须**大于**上面的 Timeout: xunit 的看门狗到点会直接打断测试体, 而 HeadlessGui 只有在自己超时的那一刻
+     * 才能丢掉卡住的会话; 看门狗更早就等于把一条已经卡住的调度线程留在原地, 之后每个 GUI 用例都跟着失败。
+     * 这里留出夹具准备(真实宿主进程/文件仓库)的余量, 与被测行为无关。
+     */
+    public const int FactTimeoutMilliseconds = 60_000;
+
     private static readonly Lock Gate = new();
 
     private static HeadlessUnitTestSession? _sharedSession;

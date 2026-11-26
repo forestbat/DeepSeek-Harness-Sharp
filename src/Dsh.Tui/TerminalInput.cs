@@ -43,6 +43,12 @@ internal interface ITerminalInputSource : IDisposable
 
     bool EndOfStream { get; }
 
+    /**
+     * 输入是终端原始字节(而不是控制台记录): 只有这时才可以让终端按 kitty/modifyOtherKeys 编码修饰键,
+     * 因为解码侧认得出那些序列(见 TerminalInputModes)。
+     */
+    bool DecodesEscapeSequences { get; }
+
     /** 从任意线程唤醒阻塞中的 Read, 用于 UI 事件驱动的重绘。 */
     void Wake();
 }
@@ -473,6 +479,8 @@ internal sealed class TerminalInputReader : ITerminalInputSource
     }
 
     public bool EndOfStream { get; private set; }
+
+    public bool DecodesEscapeSequences => true;
 
     /** 内核视角的唤醒管道状态: 两端都带 O_NONBLOCK 时, 排空管道读到空会立即返回而不是阻塞。 */
     internal bool WakePipeIsNonBlocking

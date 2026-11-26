@@ -173,7 +173,7 @@ public sealed partial class NotificationCenterViewModel : ObservableObject, IDis
             var lease = await connection.WaitConnectedAsync(CancellationToken.None);
             await lease.Client.Notifications.MarkNotificationsReadAsync(request, CancellationToken.None);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or OperationCanceledException)
         {
             Toast?.Invoke($"{machine}: 标记已读失败", error.Message, true);
         }

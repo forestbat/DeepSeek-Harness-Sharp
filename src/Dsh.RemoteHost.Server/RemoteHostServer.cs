@@ -82,14 +82,13 @@ public sealed class RemoteHostServer(
             using (var channel = JsonRpcChannel.Serve(duplex, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default),
                 contracts: [new(RpcTargetMetadata.FromShape<IHostRpc>(), connection), ..connection.CreateTargets()], methods: connection.EditorMethods()))
             {
-                using var registration = cancellationToken.Register(channel.Dispose);
                 try
                 {
                     connection.AttachPush(channel.Attach<IHostPush>());
                     connection.AttachEditorChannel(channel);
                     // Register routes before starting independent domain initialization.
                     await connection.StartIfTrustedAsync().ConfigureAwait(false);
-                    await channel.Completion.ConfigureAwait(false);
+                    await channel.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is ConnectionLostException or IOException or ObjectDisposedException or OperationCanceledException)
                 {

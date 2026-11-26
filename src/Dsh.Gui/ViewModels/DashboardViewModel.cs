@@ -268,7 +268,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
             ActionReported?.Invoke("已重命名", title, false);
             Refresh();
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or InvalidOperationException or OperationCanceledException)
         {
             ActionReported?.Invoke("重命名失败", error.Message, true);
         }
@@ -291,7 +291,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
             var path = await _actions.ExportLogAsync(ToRef(card), CancellationToken.None);
             ActionReported?.Invoke("已导出日志", path, false);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or InvalidOperationException or OperationCanceledException)
         {
             ActionReported?.Invoke("导出失败", error.Message, true);
         }
@@ -308,7 +308,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
             ActionReported?.Invoke("会话已删除", card.Title, false);
             Refresh();
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or InvalidOperationException or OperationCanceledException)
         {
             ActionReported?.Invoke("删除失败", error.Message, true);
         }

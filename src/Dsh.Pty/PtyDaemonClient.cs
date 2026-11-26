@@ -240,6 +240,42 @@ public static class PtyDaemonClient
     }
 
     /**
+     * 打开会话的输入旁路(常驻 TUI 专用): 之后代理/窗口送进来的键盘、粘贴与鼠标字节都从这条流出来, 与 Unix 的
+     * 原始终端字节一致, 不再经 pty 的 ConPTY 输入翻译。老版本 daemon 不认识这个方法, 调用方据此退回控制台记录。
+     */
+    public static Task<Stream> OpenInputChannelAsync(string id, CancellationToken cancellationToken = default)
+        => OpenInputChannelAsync(
+            id,
+            PtyDaemonPaths.SocketPath(),
+            OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null,
+            cancellationToken);
+
+    public static async Task<Stream> OpenInputChannelAsync(
+        string id,
+        string socketPath,
+        string? portFile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ConsoleCodePage.EnsureUtf8();
+        var socket = await ConnectAsync(socketPath, portFile, cancellationToken);
+        var stream = new NetworkStream(socket, ownsSocket: true);
+        try
+        {
+            await WriteRequestAsync(stream, new PtyDaemonRequest { Method = "input", Id = id }, socketPath, portFile, cancellationToken);
+            var response = await ReadResponseAsync(stream, cancellationToken);
+            if (!response.Ok)
+                throw new InvalidOperationException(response.Error ?? "daemon input channel was refused");
+            return stream;
+        }
+        catch
+        {
+            await stream.DisposeAsync();
+            throw;
+        }
+    }
+
+    /**
      * 窗格级订阅: 订阅某 pty 的字节流(首帧为当前屏的状态重建快照), 返回可读可写的会话句柄。
      * 与 AttachAsync 的区别是不独占会话 —— 不排空历史、不改 attached 状态、可多方同时订阅同一 pty。
      */
@@ -511,9 +547,21 @@ public static class PtyDaemonClient
         var response = JsonSerializer.Deserialize(line, PtyDaemonJsonContext.Default.PtyDaemonResponse)
             ?? throw new InvalidOperationException("daemon returned an invalid response");
         if (!response.Ok && throwOnError)
-            throw new InvalidOperationException(response.Error ?? "daemon request failed");
+            throw IsMissingSession(response)
+                ? new PtySessionNotFoundException(response.Error ?? "PTY session not found")
+                : new InvalidOperationException(response.Error ?? "daemon request failed");
         return response;
     }
+
+    /**
+     * daemon 明确说"没有这个 pty"。
+     *
+     * 新 daemon 另带 notFound 标志; 还在跑的老 daemon 只把它写在错误文本里(协议没变之前就是这个措辞), 两种都要认 ——
+     * 否则升级后第一次删除一个 daemon 早已不认识的终端会话仍旧会失败。
+     */
+    private static bool IsMissingSession(PtyDaemonResponse response)
+        => response.NotFound
+            || response.Error?.StartsWith("PTY session not found:", StringComparison.Ordinal) == true;
 
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken cancellationToken)
     {

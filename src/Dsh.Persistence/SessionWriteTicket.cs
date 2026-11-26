@@ -145,7 +145,9 @@ public static class SessionWriteTicket
             return null;
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            // 共享读写与删除: 票随时可能被同一个目录下的写者就地重写, 读的一方不该把写入挡住。
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var document = JsonDocument.Parse(stream);
             var root = document.RootElement;
             return new SessionTicketHolder(
                 Pid: root.GetProperty("pid").GetInt32(),
@@ -163,24 +165,30 @@ public static class SessionWriteTicket
         }
     }
 
+    /**
+     * 就地重写票面。
+     *
+     * 不写成"临时文件 + 改名": 改名要目标文件的 DELETE 权限, 而票文件常被别的读者瞬时打开,
+     * 在 Windows 上表现为 ACCESS_DENIED —— 一次瞬时占用就把发号判成失败, 与"票"要表达的语义无关。
+     *
+     * 就地重写不会读到半截票: 票的所有读写都在同一把锁文件下进行(见 NextSeq / MarkDurable / Release / Inspect),
+     * 锁文件以 FileShare.None 打开, 因此同一会话任何时刻只有一个线程在碰这张票。
+     * 万一进程在写到一半时断电, 半截 JSON 会被 Read 判成"没有票", 下一个写者按日志条数重建。
+     */
     private static void Write(string path, SessionTicketHolder holder)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temp = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        using (var writer = new Utf8JsonWriter(stream))
-        {
-            writer.WriteStartObject();
-            writer.WriteNumber("pid", holder.Pid);
-            writer.WriteString("machine", holder.Machine);
-            writer.WriteNumber("processStartUtc", holder.ProcessStartUtc);
-            writer.WriteString("writerId", holder.WriterId);
-            writer.WriteNumber("epoch", holder.Epoch);
-            writer.WriteNumber("expiresUtc", holder.ExpiresUtc);
-            writer.WriteNumber("nextSeq", holder.NextSeq);
-            writer.WriteEndObject();
-        }
-        File.Move(temp, path, overwrite: true);
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        writer.WriteNumber("pid", holder.Pid);
+        writer.WriteString("machine", holder.Machine);
+        writer.WriteNumber("processStartUtc", holder.ProcessStartUtc);
+        writer.WriteString("writerId", holder.WriterId);
+        writer.WriteNumber("epoch", holder.Epoch);
+        writer.WriteNumber("expiresUtc", holder.ExpiresUtc);
+        writer.WriteNumber("nextSeq", holder.NextSeq);
+        writer.WriteEndObject();
     }
 
     /** 旧版本的写租约文件: 票机制下它没有任何读者, 见到就删, 免得留下"谁在写"的假线索。 */

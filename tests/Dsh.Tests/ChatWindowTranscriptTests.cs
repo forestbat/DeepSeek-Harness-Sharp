@@ -459,6 +459,127 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Equal(3, chat.InputPane.Input.Split('\n').Length);
     }
 
+    /**
+     * 粘贴多行文本必须是**一条**草稿: 换行留在草稿里, 不能被当回车逐行发出去(用户报的可用性 bug),
+     * 也不能被压成空格(InsertText 的行为)。
+     */
+    [Fact]
+    public async Task PastingMultiLineText_StaysOneDraft_WithLineBreaks()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+
+        chat.HandlePaste("第一行\r\n第二行\n第三行");
+
+        Assert.Equal("第一行\n第二行\n第三行", chat.InputPane.Input);
+        Assert.False(chat.InputPane.Busy);
+    }
+
+    /**
+     * Shift+Enter 的真正形状: 终端按 kitty CSI-u / xterm modifyOtherKeys 送进来的编码, 解码后必须插换行而不是发送。
+     * 旧用例直接造 `Enter+Shift` 的 ConsoleKeyInfo, 跳过了"终端到底送什么"这一层。
+     */
+    [Theory]
+    [InlineData("\u001b[13;2u")]
+    [InlineData("\u001b[27;2;13~")]
+    public async Task ShiftEnterEncodedByTheTerminal_InsertsLineBreak(string sequence)
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        var parser = new TerminalInputParser();
+        parser.Append(Encoding.ASCII.GetBytes("A" + sequence + "B"));
+        Assert.True(parser.TryParse(out var first));
+        Assert.True(parser.TryParse(out var lineBreak));
+        Assert.True(parser.TryParse(out var last));
+
+        chat.HandleKey(first.Key);
+        chat.HandleKey(lineBreak.Key);
+        chat.HandleKey(last.Key);
+
+        Assert.Equal("A\nB", chat.InputPane.Input);
+        Assert.False(chat.InputPane.Busy);
+    }
+
+    /**
+     * ↑/↓ 只在草稿开头/末尾切历史:
+     * 光标停在首行中间时按 ↑ 只是想往上挪, 修改不能被历史整段替换(用户就是被这个清空过草稿)。
+     */
+    [Fact]
+    public async Task UpArrowMidDraft_MovesTheCaret_AndKeepsTheDraft()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        // 先发一条, 让历史里有东西可切。
+        Type(chat, "上一条消息");
+        chat.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        await PumpUntilAsync(chat, frame => frame.Contains("上一条消息", StringComparison.Ordinal));
+
+        Type(chat, "第一行");
+        chat.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, true, false, false));
+        Type(chat, "第二行");
+        var draft = chat.InputPane.Input;
+        Assert.Equal("第一行\n第二行", draft);
+        // 光标停在首行中间(不是开头):
+        chat.InputPane.Cursor = 2;
+
+        Press(chat, ConsoleKey.UpArrow);
+
+        // 首行之上没有视觉行: 这次按键什么都不做 —— 但绝不能把草稿换成历史。
+        Assert.Equal(draft, chat.InputPane.Input);
+        Assert.Equal(2, chat.InputPane.Cursor);
+    }
+
+    /** 光标在草稿开头时 ↑ 才切上一条; 再按 ↓ 回到**原来那份草稿**, 而不是空串。 */
+    [Fact]
+    public async Task HistoryRecallAtDraftStart_SwitchesAndRestoresTheDraft()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        Type(chat, "历史里的消息");
+        chat.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        await PumpUntilAsync(chat, frame => frame.Contains("历史里的消息", StringComparison.Ordinal));
+
+        Type(chat, "还没发出去的草稿");
+        chat.InputPane.Cursor = 0;
+        Press(chat, ConsoleKey.UpArrow);
+        Assert.Equal("历史里的消息", chat.InputPane.Input);
+
+        // ↓ 越过最新一条就回到草稿本身, 连光标位置一起还原(不是回到空串)。
+        Press(chat, ConsoleKey.DownArrow);
+        Assert.Equal("还没发出去的草稿", chat.InputPane.Input);
+        Assert.Equal(0, chat.InputPane.Cursor);
+    }
+
+    /** 软折行的单行长草稿: ↑/↓ 在视觉行之间移动, 不许顺手把草稿换成历史。 */
+    [Fact]
+    public async Task ArrowKeysOnASoftWrappedSingleLineDraft_MoveTheCaretOnly()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        Type(chat, "历史消息");
+        chat.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        await PumpUntilAsync(chat, frame => frame.Contains("历史消息", StringComparison.Ordinal));
+
+        var longLine = new string('长', 300);
+        Type(chat, longLine);
+        var draft = chat.InputPane.Input;
+        Assert.Equal(longLine, draft);
+        // 画一帧: 按行移动要用绘制时的输入区宽度。
+        DrawFrame(chat);
+
+        Press(chat, ConsoleKey.UpArrow);
+        Assert.Equal(draft, chat.InputPane.Input);
+        Assert.True(chat.InputPane.Cursor < draft.Length, "↑ 应当把光标挪到上一视觉行, 而不是切历史");
+        Press(chat, ConsoleKey.DownArrow);
+        Assert.Equal(draft, chat.InputPane.Input);
+        Assert.Equal(draft.Length, chat.InputPane.Cursor);
+    }
+
     private static int RowOf(string frame, string needle)
     {
         var rows = frame.Split('\n');
@@ -1039,3 +1160,5 @@ public sealed class ChatWindowTranscriptTests : IDisposable
 
     public void Dispose() => TempTree.Delete(_homeDir);
 }
+
+

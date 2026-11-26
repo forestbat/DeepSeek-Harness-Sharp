@@ -13,16 +13,20 @@ SCRIPT = ROOT / "scripts" / "select-ci.py"
 SPEC = importlib.util.spec_from_file_location("select_ci", SCRIPT)
 SELECTOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SELECTOR)
-ALL_SUITES = ["quick", "regression-1", "regression-2", "regression-3", "raw"]
+ALL_SUITES = ["quick", "regression", "raw"]
+NATIVE_SUITES = ["quick", "regression", "raw"]
 
 
 class SelectionTests(unittest.TestCase):
-    def assert_selection(self, paths, *, suites=(), jit=False, aot=False, validate=False,
-                         event="pull_request", manual_aot=False):
+    def assert_selection(self, paths, *, suites=(), jit=False, android=None, aot=False,
+                         validate=False, event="pull_request", manual_aot=False):
+        # The APK bundles the same shared assemblies as the desktop entries, so it
+        # follows jit wherever the selection is conservative; pass android explicitly
+        # only to pin that down.
         self.assertEqual(
             SELECTOR.classify_changes(paths, event, manual_aot),
-            {"tests": bool(suites), "jit": jit, "aot": aot,
-             "validate": validate, "suites": list(suites)},
+            {"tests": bool(suites), "jit": jit, "android": jit if android is None else android,
+             "aot": aot, "validate": validate, "suites": list(suites)},
         )
 
     def test_safe_documentation_allowlist(self):
@@ -35,15 +39,38 @@ class SelectionTests(unittest.TestCase):
     def test_embedded_markdown_is_not_documentation(self):
         for path in ("src/Dsh.Core/prompts/system.md", "assets/README.md", ".github/README.md"):
             with self.subTest(path=path):
-                self.assert_selection([path], suites=ALL_SUITES, jit=True, aot=True)
+                self.assert_selection([path], suites=["quick"], jit=True, aot=True)
 
     def test_empty_diff_runs_nothing(self):
         self.assert_selection([])
 
-    def test_test_only_keeps_native_raw_and_regressions_without_publishing(self):
+    def test_source_change_covers_quick_and_publishing_only(self):
+        # regression 的类全部包含在 quick 里, 源码改动不需要第二份同样的运行。
+        for path in ("src/Dsh.Core/Agent.cs", "src/Dsh.Gui/ViewModels/MainViewModel.cs"):
+            with self.subTest(path=path):
+                self.assert_selection([path], suites=["quick"], jit=True, aot=True)
+
+    def test_native_and_terminal_sources_cover_every_suite(self):
+        for path in ("native/plugin_guard/guard.c", "src/Dsh.Tui/ChatWindow.cs",
+                     "src/Dsh.Pty/PtyDaemon.cs", "src/Dsh.PtyTerminal/PtyTerminalBackend.cs"):
+            with self.subTest(path=path):
+                self.assert_selection([path], suites=NATIVE_SUITES, jit=True, aot=True)
+
+    def test_scripts_cover_quick_and_publishing(self):
+        for path in ("scripts/smoke-web-host.ps1", "scripts/fetch-iroh-ssh.sh"):
+            with self.subTest(path=path):
+                self.assert_selection([path], suites=["quick"], jit=True, aot=True)
+
+    def test_test_project_changes_cover_quick_and_regression_without_publishing(self):
         self.assert_selection(
-            ["tests/Dsh.Tests/TuiRawModeEndToEndTests.cs", "tests/Dsh.Tests/Fixtures/prompt.md"],
-            suites=ALL_SUITES,
+            ["tests/Dsh.Tests/Fixtures/prompt.md", "tests/Dsh.Tests/UnitTests.cs"],
+            suites=["quick", "regression"],
+        )
+
+    def test_raw_mode_test_changes_add_the_raw_suite(self):
+        self.assert_selection(
+            ["tests/Dsh.Tests/TuiRawModeEndToEndTests.cs"],
+            suites=["quick", "regression", "raw"],
         )
 
     def test_build_metadata_is_always_conservative(self):
@@ -67,50 +94,54 @@ class SelectionTests(unittest.TestCase):
             "tests/Dsh.IocAotSmoke/Program.cs",
         ):
             with self.subTest(path=path):
-                self.assert_selection([path], suites=ALL_SUITES, jit=True, aot=True)
+                self.assert_selection([path], suites=["quick"], jit=True, aot=True)
 
     def test_mixed_paths_take_the_union(self):
         self.assert_selection(
             ["docs/ci.md", "tests/Dsh.Tests/TuiRawModeEndToEndTests.cs",
              ".github/workflows/release.yml"],
-            suites=ALL_SUITES, validate=True,
+            suites=["quick", "regression", "raw"], validate=True,
         )
         self.assert_selection(
             ["README.md", "tests/Dsh.Tests/UnitTests.cs", "src/Dsh.Core/Agent.cs"],
-            suites=ALL_SUITES, jit=True, aot=True,
+            suites=["quick", "regression"], jit=True, aot=True,
         )
 
-    def test_release_workflows_only_require_validation(self):
+    def test_workflow_changes_only_require_validation(self):
+        # CI 自身的改动由 actionlint 与选测规则单测把关, 不必为此再跑一遍全部测试。
         for path in (
-            ".github/workflows/release.yml", ".github/workflows/release-assets.yml",
-            ".github/workflows/interactive.yml",
-        ):
-            with self.subTest(path=path):
-                self.assert_selection([path], validate=True)
-
-    def test_ci_and_unknown_workflows_are_conservative(self):
-        for path in (
+            ".github/workflows/release.yml", ".github/workflows/interactive.yml",
             ".github/workflows/ci.yml", ".github/workflows/ci-tests.yml",
             ".github/workflows/ci-aot.yml", ".github/workflows/new-job.yaml",
         ):
             with self.subTest(path=path):
-                self.assert_selection([path], suites=ALL_SUITES, jit=True, aot=True, validate=True)
+                self.assert_selection([path], validate=True)
 
-    def test_selector_changes_require_full_ci_and_validation(self):
+    def test_selector_changes_only_require_validation(self):
         for path in ("scripts/select-ci.py", "tests/ci/test_select_ci.py", "tests/ci/test_other.py"):
             with self.subTest(path=path):
-                self.assert_selection([path], suites=ALL_SUITES, jit=True, aot=True, validate=True)
+                self.assert_selection([path], validate=True)
 
     def test_unknown_and_deleted_paths_do_not_require_file_existence(self):
         for path in ("unexpected/path", "src/Deleted.cs", "tests/Dsh.Tests/DeletedTests.cs"):
             with self.subTest(path=path):
                 if path == "tests/Dsh.Tests/DeletedTests.cs":
-                    self.assert_selection([path], suites=ALL_SUITES)
+                    self.assert_selection([path], suites=["quick", "regression"])
                 else:
-                    self.assert_selection([path], suites=ALL_SUITES, jit=True, aot=True)
+                    self.assert_selection([path], suites=["quick"], jit=True, aot=True)
+
+    def test_android_apk_is_built_only_for_its_own_or_shared_changes(self):
+        # Shared code also rebuilds the APK, which bundles the same assemblies.
+        self.assert_selection(["src/Dsh.Core/Agent.cs"], suites=["quick"], jit=True, android=True, aot=True)
+        # Build metadata is conservative everywhere, APK included.
+        self.assert_selection(["Directory.Build.props"], suites=ALL_SUITES, jit=True, android=True, aot=True)
+        # An Android-only change rebuilds the APK and nothing on the desktop.
+        self.assert_selection(["src/Dsh.Android/MainActivity.cs"], suites=[], jit=False, android=True)
+        self.assert_selection(["README.md", "docs/ci.md"], android=False)
+        self.assert_selection(["tests/Dsh.Tests/UnitTests.cs"], suites=["quick", "regression"], android=False)
 
     def test_push_does_not_add_aot(self):
-        self.assert_selection(["src/Dsh.Core/Agent.cs"], event="push", suites=ALL_SUITES, jit=True)
+        self.assert_selection(["src/Dsh.Core/Agent.cs"], event="push", suites=["quick"], jit=True)
 
     def test_manual_runs_everything_except_opted_out_aot(self):
         for aot in (False, True):
@@ -140,7 +171,7 @@ class CommandLineTests(unittest.TestCase):
                 result = self.run_selector(base=base, head="invalid-revision", aot="true")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.parse_output(result.stdout), {
-                    "tests": True, "jit": True, "aot": False, "validate": True,
+                    "tests": True, "jit": True, "android": True, "aot": False, "validate": True,
                     "suites": ALL_SUITES,
                 })
 
@@ -151,7 +182,7 @@ class CommandLineTests(unittest.TestCase):
                                            head="invalid-head", aot=aot)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.parse_output(result.stdout), {
-                    "tests": True, "jit": True, "aot": aot == "true", "validate": True,
+                    "tests": True, "jit": True, "android": True, "aot": aot == "true", "validate": True,
                     "suites": ALL_SUITES,
                 })
 
@@ -177,7 +208,7 @@ class CommandLineTests(unittest.TestCase):
             contents = output.read_text(encoding="utf-8")
             self.assertTrue(contents.startswith("existing=value\n"))
             self.assertEqual(self.parse_output(contents.removeprefix("existing=value\n")), {
-                "tests": False, "jit": False, "aot": False, "validate": False, "suites": [],
+                "tests": False, "jit": False, "android": False, "aot": False, "validate": False, "suites": [],
             })
 
     def test_real_git_diff_preserves_newlines_in_paths(self):
@@ -199,8 +230,8 @@ class CommandLineTests(unittest.TestCase):
             result = self.run_selector(event="pull_request", base=base, head="HEAD", cwd=root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(self.parse_output(result.stdout), {
-                "tests": True, "jit": True, "aot": True, "validate": False,
-                "suites": ALL_SUITES,
+                "tests": True, "jit": True, "android": True, "aot": True, "validate": False,
+                "suites": ["quick"],
             })
 
     def test_rename_from_production_to_documentation_keeps_production_checks(self):
@@ -224,8 +255,8 @@ class CommandLineTests(unittest.TestCase):
             result = self.run_selector(event="pull_request", base=base, head="HEAD", cwd=root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(self.parse_output(result.stdout), {
-                "tests": True, "jit": True, "aot": True, "validate": False,
-                "suites": ALL_SUITES,
+                "tests": True, "jit": True, "android": True, "aot": True, "validate": False,
+                "suites": ["quick"],
             })
 
 

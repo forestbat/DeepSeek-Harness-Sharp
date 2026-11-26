@@ -26,10 +26,20 @@ public sealed class SessionRenumberTests : IDisposable
         }
     }
 
+    /**
+     * 关掉自动落盘的定时器, 由用例自己调 Flush 决定写盘时机。
+     *
+     * 生产默认是 100ms 攒批(见 JsonlWriteBatch.DefaultInterval), 本用例要制造"缓冲还没落盘, 号就被别人接管"这一幕:
+     * 准备 rival 的那次写入本身要几十毫秒, 用默认间隔的话缓冲会先被定时器刷掉, 场景就没了 ——
+     * 那是测试的时序假设, 不是产品行为。间隔取一个在一次测试生命周期内不会触发的值即可。
+     * 仓库里其它需要控制落盘时机的用例(SessionPersistenceTests / SessionLogStaleReplayTests 等)也是这么做的。
+     */
+    private static JsonlWriteBatch ManualFlush => new(JsonlWriteBatch.DefaultMaxEvents, TimeSpan.FromHours(1));
+
     [Fact]
     public void NumbersTakenOver_RenumberTheBufferedTailAndWriteIt()
     {
-        using var mine = new JsonlSessionPersistence(_root, compression: JsonlCompression.None);
+        using var mine = new JsonlSessionPersistence(_root, compression: JsonlCompression.None, writeBatch: ManualFlush);
         var header = NewHeader();
         using var handle = mine.Create(header);
         var session = Session.Create(header.Id, header: header);
@@ -47,7 +57,7 @@ public sealed class SessionRenumberTests : IDisposable
         Assert.Equal(4, session.Seq);
 
         // 另一个宿主把 2 号写进了日志(它自己按日志条数发号, 顺序完全合法)。
-        using (var rival = new JsonlSessionPersistence(_root, compression: JsonlCompression.None))
+        using (var rival = new JsonlSessionPersistence(_root, compression: JsonlCompression.None, writeBatch: ManualFlush))
         using (var rivalHandle = rival.Open(header.Id, SessionAccess.Write))
         {
             rivalHandle.Append([new SessionEvent

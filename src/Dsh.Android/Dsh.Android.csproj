@@ -19,7 +19,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>15</LangVersion>
     <ApplicationId>ai.dsh.mobile</ApplicationId>
-    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationVersion>400</ApplicationVersion>
     <ApplicationDisplayVersion>0.4.0</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <!-- 侧载安装(文件管理器点开 APK)不会走 fast deployment, 程序集必须打进 APK 才能独立启动。 -->
@@ -59,9 +59,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.4" />
-    <PackageReference Include="Avalonia.Android" Version="12.1.4" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Android" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
   </ItemGroup>
