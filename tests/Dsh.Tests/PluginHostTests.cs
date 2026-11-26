@@ -1,8 +1,11 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Ide.Bridge;
 using Dsh.Runtime;
+using Dsh.Runtime.Composition;
 using Dsh.Runtime.Events;
 using Dsh.Plugins;
 using Dsh.Ide;
@@ -15,6 +18,109 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public sealed class PluginHostTests
 {
+    private const string SampleArtifact = "Dsh.ManagedPluginSample.dll";
+    private const string SamplePackage = "test/local";
+
+    [Fact]
+    public void ManagedInspectionReleasesTheArtifactWithoutWaitingForCollection()
+    {
+        var root = TempTree.CreateDirectory("plugin-inspection");
+        var artifact = Path.Combine(root, SampleArtifact);
+        try
+        {
+            File.Copy(Path.Combine(AppContext.BaseDirectory, SampleArtifact), artifact);
+
+            Assert.Equal(new[] { SamplePackage }, PluginHost.InspectManagedPackages(artifact));
+
+            using var writable = File.Open(artifact, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            Assert.True(writable.Length > 0);
+        }
+        finally { TempTree.Delete(root); }
+    }
+
+    [Fact]
+    public async Task ReloadKeepsTheInstalledArtifactWhileItsOldLoadContextIsReferenced()
+    {
+        var root = TempTree.CreateDirectory("plugin-reload");
+        try
+        {
+            var home = new HarnessHome(root);
+            var plugins = Path.Combine(root, "plugins");
+            var source = Path.Combine(root, SampleArtifact);
+            File.Copy(Path.Combine(AppContext.BaseDirectory, SampleArtifact), source);
+            var host = new PluginHost();
+            var composition = await Composition.StartAsync(new Context(), []);
+            using var manager = new HarnessPluginManager(host, composition, home, HarnessSettings.Load(home), [], [], [], null, plugins, null);
+            await manager.AddAsync(source, cancellationToken: TestContext.Current.CancellationToken);
+            AssertSampleActive(composition);
+            var installed = Path.Combine(plugins, Path.GetFileNameWithoutExtension(SampleArtifact), SampleArtifact);
+            var originalLength = new FileInfo(installed).Length;
+            await File.AppendAllTextAsync(source, "replacement payload", TestContext.Current.CancellationToken);
+
+            var (retainedFactory, context) = RetainSampleFactory(host);
+            try
+            {
+                var result = await manager.ReloadAsync(SamplePackage, source, cancellationToken: TestContext.Current.CancellationToken);
+                var retry = await manager.ReloadAsync(SamplePackage, source, cancellationToken: TestContext.Current.CancellationToken);
+                Assert.Contains("still referenced", result);
+                Assert.Contains("still referenced", retry);
+                Assert.Contains("leaked", manager.Describe(SamplePackage));
+                Assert.Equal(originalLength, new FileInfo(installed).Length);
+            }
+            finally { retainedFactory.Value = null; }
+
+            Assert.True(PluginUnloader.WaitForCollection(context, out var report), report);
+            var recovered = await manager.ReloadAsync(SamplePackage, source, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Contains("reloaded", recovered);
+            AssertSampleActive(composition);
+            Assert.Equal(File.ReadAllBytes(source), File.ReadAllBytes(installed));
+            Assert.Null(await manager.DetachForExternalMutationAsync(SamplePackage, reclaimArtifact: true));
+        }
+        finally { TempTree.Delete(root); }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (StrongBox<Func<IDshPlugin>?> Factory, WeakReference Context) RetainSampleFactory(PluginHost host)
+    {
+        Assert.True(host.Catalog.TryGet(SamplePackage, out var factory));
+        var context = AssemblyLoadContext.GetLoadContext(factory!.Method.DeclaringType!.Assembly);
+        return (new StrongBox<Func<IDshPlugin>?>(factory), new WeakReference(context, trackResurrection: true));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AssertSampleActive(Composition composition)
+        => Assert.Equal(ActivationState.Active, composition.Find(SamplePackage)?.State);
+
+    [Fact]
+    public async Task KnownArtifactReloadDoesNotRequireDiscoveringNewFiles()
+    {
+        var root = TempTree.CreateDirectory("plugin-reconcile");
+        var signal = TestContext.Current.CancellationToken;
+        try
+        {
+            var home = new HarnessHome(root);
+            var plugins = Path.Combine(root, "plugins");
+            var directory = Directory.CreateDirectory(Path.Combine(plugins, Path.GetFileNameWithoutExtension(SampleArtifact)));
+            File.Copy(Path.Combine(AppContext.BaseDirectory, SampleArtifact), Path.Combine(directory.FullName, SampleArtifact));
+            var host = new PluginHost();
+            var composition = await Composition.StartAsync(new Context(), []);
+            using var manager = new HarnessPluginManager(host, composition, home, HarnessSettings.Load(home), [], [], [], null, plugins, null);
+
+            await manager.SynchronizeWithDiskAsync(signal, discoverArtifacts: false);
+            Assert.Null(composition.Find(SamplePackage));
+            await manager.SynchronizeWithDiskAsync(signal);
+            Assert.Equal(ActivationState.Active, composition.Find(SamplePackage)?.State);
+            Assert.Null(await manager.DetachForExternalMutationAsync(SamplePackage, reclaimArtifact: true, signal));
+            Assert.Null(composition.Find(SamplePackage));
+
+            await manager.SynchronizeWithDiskAsync(signal, discoverArtifacts: false);
+
+            Assert.Equal(ActivationState.Active, composition.Find(SamplePackage)?.State);
+            await manager.DetachForExternalMutationAsync(SamplePackage, reclaimArtifact: true, signal);
+        }
+        finally { TempTree.Delete(root); }
+    }
+
     [Fact]
     public async Task RegisterCompiledIn_RegistersDefinitionAndActivates()
     {

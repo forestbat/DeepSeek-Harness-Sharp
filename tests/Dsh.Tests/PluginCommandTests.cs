@@ -8,6 +8,23 @@ namespace Dsh.Tests;
 
 public sealed class PluginCommandTests
 {
+    [Theory]
+    [InlineData("/plugins reload sample path with spaces.dll")]
+    [InlineData("/plugins\treload sample path with spaces.dll")]
+    [InlineData("/plugins:reload sample path with spaces.dll")]
+    public void MutationParser_UsesTheCommandGrammarAndKeepsTheArtifactPath(string input)
+    {
+        var mutation = PluginCommand.ParseMutationCommand(input);
+        Assert.Equal(new PluginCommand.Mutation("reload", "sample", "path with spaces.dll"), mutation);
+    }
+
+    [Theory]
+    [InlineData("/plugins remove --force")]
+    [InlineData("/plugins-other remove sample")]
+    [InlineData("Show me how to reload a plugin")]
+    public void MutationParser_RejectsInputThatWillNotChangePlugins(string input)
+        => Assert.Null(PluginCommand.ParseMutationCommand(input));
+
     [Fact]
     public async Task PluginsList_ShowsLoadFailureGroup_AndDoctorExplainsIt()
     {

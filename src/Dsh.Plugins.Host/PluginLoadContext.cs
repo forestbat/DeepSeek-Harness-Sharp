@@ -8,15 +8,27 @@ namespace Dsh.Plugins;
 public sealed class PluginLoadContext : AssemblyLoadContext
 {
     private readonly AssemblyDependencyResolver _resolver;
+    private readonly bool _mapManagedFiles;
     private SharedAssemblyPool? _pool;
     private HashSet<string> _sharedNames = new(StringComparer.OrdinalIgnoreCase);
 
     public PluginLoadContext(string pluginPath, string? name = null)
+        : this(pluginPath, name, mapManagedFiles: true) { }
+
+    internal PluginLoadContext(string pluginPath, string? name, bool mapManagedFiles)
         : base(name ?? $"dsh-plugin:{Path.GetFileNameWithoutExtension(pluginPath)}", isCollectible: true)
     {
         _resolver = new AssemblyDependencyResolver(pluginPath);
+        _mapManagedFiles = mapManagedFiles;
     }
 
+    internal Assembly LoadManagedAssembly(string path)
+    {
+        if (_mapManagedFiles)
+            return LoadFromAssemblyPath(path);
+        using var source = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        return LoadFromStream(source);
+    }
 
     /** 清单读出后调用:声明共享的依赖名进共享池解析,其余维持目录私有。 */
     internal void ConfigureShared(SharedAssemblyPool? pool, IEnumerable<string> sharedNames)
@@ -36,7 +48,7 @@ public sealed class PluginLoadContext : AssemblyLoadContext
         if (_pool is not null && _sharedNames.Contains(name))
             return _pool.ResolveOrLoad(assemblyName, () => _resolver.ResolveAssemblyToPath(assemblyName));
         var path = _resolver.ResolveAssemblyToPath(assemblyName);
-        return path is null ? null : LoadFromAssemblyPath(path);
+        return path is null ? null : LoadManagedAssembly(path);
     }
 
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)

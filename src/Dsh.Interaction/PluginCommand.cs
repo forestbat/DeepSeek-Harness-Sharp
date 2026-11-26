@@ -7,6 +7,31 @@ namespace Dsh.Interaction;
 
 public static class PluginCommand
 {
+    public readonly record struct Mutation(string Subcommand, string Target, string? ArtifactPath = null, bool Force = false);
+
+    public static Mutation? ParseMutationCommand(string input)
+    {
+        if (!input.StartsWith("/plugins", StringComparison.Ordinal)
+            || CommandsService.ParseCommand(input) is not { Name: "plugins" } command)
+            return null;
+        var arguments = command.Selector is { Length: > 0 } selector ? $"{selector}{command.RawInput}" : command.RawInput;
+        return ParseMutation(arguments.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static Mutation? ParseMutation(string[] tokens)
+    {
+        if (tokens.Length < 2) return null;
+        return tokens[0] switch
+        {
+            "add" => new("add", string.Join(' ', tokens.Skip(1)).Trim()),
+            "remove" when tokens.Skip(1).FirstOrDefault(token => token != "--force") is { } package
+                => new("remove", package, Force: tokens.Contains("--force", StringComparer.Ordinal)),
+            "enable" or "disable" => new(tokens[0], tokens[1]),
+            "reload" => new("reload", tokens[1], tokens.Length > 2 ? string.Join(' ', tokens.Skip(2)).Trim() : null),
+            _ => null,
+        };
+    }
+
     public static IDisposable Register(Context ctx, PluginCatalog catalog)
     {
         var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
@@ -50,19 +75,10 @@ public static class PluginCommand
                     return Task.FromResult<CommandResult>(
                         new CommandResult.Error("plugin manager is not available"));
                 }
+                if (ParseMutation(tokens) is { } mutation)
+                    return ExecuteMutationAsync(manager, mutation);
                 switch (tokens[0])
                 {
-                    case "add" when tokens.Length > 1:
-                        return RunAsync(manager.AddAsync(string.Join(' ', tokens.Skip(1)).Trim()));
-                    case "remove" when tokens.Skip(1).FirstOrDefault(token => token != "--force") is { } package:
-                        return RunAsync(manager.RemoveAsync(package, tokens.Contains("--force", StringComparer.Ordinal)));
-                    case "disable" when tokens.Length > 1:
-                        return RunAsync(manager.DisableAsync(tokens[1]));
-                    case "enable" when tokens.Length > 1:
-                        return RunAsync(manager.EnableAsync(tokens[1]));
-                    case "reload" when tokens.Length > 1:
-                        var reloadPath = tokens.Length > 2 ? string.Join(' ', tokens.Skip(2)).Trim() : null;
-                        return RunAsync(manager.ReloadAsync(tokens[1], reloadPath));
                     case BanRead or EnableRead when tokens.Length > 1:
                         return RunAsync(manager.SetPermissionAsync(tokens[1], PluginPermission.Read, allowed: tokens[0] == EnableRead));
                     case BanWrite or EnableWrite when tokens.Length > 1:
@@ -76,6 +92,17 @@ public static class PluginCommand
             },
         });
     }
+
+    private static Task<CommandResult> ExecuteMutationAsync(HarnessPluginManager manager, Mutation mutation)
+        => RunAsync(mutation.Subcommand switch
+        {
+            "add" => manager.AddAsync(mutation.Target),
+            "remove" => manager.RemoveAsync(mutation.Target, mutation.Force),
+            "disable" => manager.DisableAsync(mutation.Target),
+            "enable" => manager.EnableAsync(mutation.Target),
+            "reload" => manager.ReloadAsync(mutation.Target, mutation.ArtifactPath),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+        });
 
     private const string BanRead = "ban_read";
     private const string EnableRead = "enable_read";

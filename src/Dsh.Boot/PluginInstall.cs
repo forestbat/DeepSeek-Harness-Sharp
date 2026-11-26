@@ -8,13 +8,18 @@ namespace Dsh.Boot;
 public static class PluginInstall
 {
     private const int MaximumDependencyManifestBytes = 4 * 1024 * 1024;
+
+    internal static string ResolveInstallPath(string sourcePath, string pluginsRoot)
+        => Path.Combine(pluginsRoot, Path.GetFileNameWithoutExtension(sourcePath), Path.GetFileName(sourcePath));
+
     public static string Install(string sourcePath, string pluginsRoot, bool overwrite = false)
     {
-        var staging = Path.Combine(pluginsRoot, Path.GetFileNameWithoutExtension(sourcePath));
+        var installed = ResolveInstallPath(sourcePath, pluginsRoot);
+        var staging = Path.GetDirectoryName(installed)!;
         Directory.CreateDirectory(staging);
         foreach (var file in ArtifactFiles(sourcePath))
             CopyIfChanged(file, Path.Combine(staging, Path.GetFileName(file)), overwrite);
-        return Path.Combine(staging, Path.GetFileName(sourcePath));
+        return installed;
     }
 
     /** Selects the artifact and its declared runtime dependencies for installation. */
