@@ -58,7 +58,7 @@ public sealed class PtyDaemonKillTests
             await daemon.StartAsync(cancellationToken);
 
             // daemon 的管道/端口握手在负载下可能尚未就绪: 对连接级 IOException 重试到拿到响应为止。
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            var error = await Assert.ThrowsAsync<PtySessionNotFoundException>(
                 () => PtyDaemonRetry.Async(() => PtyDaemonClient.KillAsync("pty-does-not-exist", socketPath, portFile, cancellationToken), cancellationToken));
             Assert.Contains("not found", error.Message, StringComparison.OrdinalIgnoreCase);
         }

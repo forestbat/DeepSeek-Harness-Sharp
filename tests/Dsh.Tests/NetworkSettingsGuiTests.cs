@@ -12,9 +12,14 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public sealed class NetworkSettingsGuiTests : IDisposable
 {
-    private const int TestTimeout = 5000;
+    /** 看门狗只拦挂死: 一条用例要起两个真实宿主进程, 每次握手另有 CompletionTimeout 兜底。 */
+    private const int TestTimeout = 120_000;
     private const string ProbeTarget = "http://1.1.1.1/gui-component-probe";
-    private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(5);
+    /**
+     * 一次操作的兜底时限。这些用例打的是真实宿主进程与真实网络路径(拨号/取消都要走系统栈),
+     * 5 秒在负载下会把"慢"判成"挂": 收紧它等于在测机器。
+     */
+    private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
     private readonly string _root = TempTree.CreateDirectory("network-gui");
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
     private static FleetOptions Options => new()

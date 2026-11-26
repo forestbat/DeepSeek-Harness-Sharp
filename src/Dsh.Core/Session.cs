@@ -261,9 +261,22 @@ public sealed class Session
      * 恢复路径上按"最后一条用户活动/最后一次策略/最后一个回合"取值的调用方一律走这里。
      */
     public SessionEvent? LastResidentEventWhere(Func<SessionEvent, bool> predicate)
+        => LastEventWhere(_residentFrom, predicate);
+
+    /**
+     * 只看**本会话自己的**事件: 前 InheritedEventCount 条是从别的会话继承来的(fork / 续接的种子)。
+     *
+     * 属于会话身份的判断(例如"这个会话里被总是允许过的工具")不能用继承来的历史 —— 否则 fork 一份会话就顺带
+     * 继承了父会话的授权; 而同一会话的恢复要认得自己此前的授权, 因此下界是 InheritedEventCount 而不是 FirstLiveSeq。
+     * 仍然只看常驻尾窗: 授权落在尾窗之外就再问一次, 方向是更保守而不是更松。
+     */
+    public SessionEvent? LastOwnEventWhere(Func<SessionEvent, bool> predicate)
+        => LastEventWhere(Math.Max(_residentFrom, InheritedEventCount), predicate);
+
+    private SessionEvent? LastEventWhere(long fromSeq, Func<SessionEvent, bool> predicate)
     {
         var snapshot = Volatile.Read(ref _snapshot);
-        for (var seq = snapshot.Total - 1; seq >= _residentFrom; seq -= 1)
+        for (var seq = snapshot.Total - 1; seq >= fromSeq; seq -= 1)
         {
             if (snapshot.EventAt(seq) is { } sessionEvent && predicate(sessionEvent))
                 return sessionEvent;

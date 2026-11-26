@@ -198,11 +198,12 @@ public sealed class PluginHostTests
     public void Scan_LoadsPluginFromPerPackageSubdirectory()
     {
         var root = Path.Combine(Path.GetTempPath(), $"dsh-scan-{Guid.NewGuid():N}");
-        var pluginDir = Path.Combine(root, "plugins", "Dsh.Tests");
+        // 被扫描的必须是真正的插件产物: 测试程序集自己已经在 Default 上下文里跑着, 再装一份也无法回收。
+        var pluginDir = Path.Combine(root, "plugins", "Dsh.ManagedPluginSample");
         Directory.CreateDirectory(pluginDir);
         File.Copy(
-            Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
-            Path.Combine(pluginDir, "Dsh.Tests.dll"));
+            Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll"),
+            Path.Combine(pluginDir, "Dsh.ManagedPluginSample.dll"));
         var weak = ScanPerPackageAndUnload(pluginDir);
         try
         {
@@ -233,8 +234,8 @@ public sealed class PluginHostTests
         var pluginsDir = Path.Combine(root, "plugins");
         Directory.CreateDirectory(pluginsDir);
         File.Copy(
-            Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
-            Path.Combine(pluginsDir, "Dsh.Tests.dll"));
+            Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll"),
+            Path.Combine(pluginsDir, "Dsh.ManagedPluginSample.dll"));
         var weak = ScanFlatAndUnload(pluginsDir);
         try
         {

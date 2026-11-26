@@ -33,7 +33,9 @@ public sealed class SessionScaleBenchTests
             using (var writer = new JsonlSessionPersistence(root, compression: compression).Create(header))
                 writer.Append(BuildEvents(header, eventCount));
             var writeMs = writeClock.ElapsedMilliseconds;
+            // 会话目录里同时存在索引、投影缓存、脏尾隔离副本与临时文件, 按名字挑日志而不是按通配碰运气。
             var logPath = JsonlLayout.LogPath(root, header.Cwd, header.Id, compression);
+            Assert.True(File.Exists(logPath), $"日志不在预期位置: {logPath}");
             var fileBytes = new FileInfo(logPath).Length;
 
             var loadMs = 0L;
@@ -64,6 +66,11 @@ public sealed class SessionScaleBenchTests
         }
     }
 
+    /**
+     * 取一窗的代价必须远低于全量展开 —— 但这是**测机器**的比值: 窗口那一段是固定开销(开索引 + 定位),
+     * 全量那一段随事件数线性增长, 因此在快机器/慢机器上比值天差地别, 放到共享 runner 上就是随机红。
+     * 它是基准, 不是闸门: 默认不跑, 需要时显式点名。
+     */
     [Fact(Explicit = true)]
     public void WindowedRead_BeatsFullParseForTailAndMiddleWindows()
     {

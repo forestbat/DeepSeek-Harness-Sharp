@@ -1,4 +1,13 @@
-"""Select CI consumers from changed paths without requiring third-party packages."""
+"""Select CI consumers from changed paths without requiring third-party packages.
+
+规则按"改动会影响什么"给出最小够用的套件, 而不是把所有路径都映射到全部套件:
+
+- `.github/workflows/**`、本脚本、`tests/ci/**` 只影响 CI 自身, 跑 actionlint 与选测规则单测即可;
+- `src/Dsh.Android/**` 只影响 APK, 不牵动桌面三入口;
+- 原生源码、构建元数据影响所有入口与发布产物, 一律全跑;
+- `tests/Dsh.Tests/**` 影响 quick 与 regression(regression 的类全部包含在 quick 里, 它只是独立的第二份运行);
+- 其余 `src/**`、`scripts/**`、未知路径走 quick + 发布校验。
+"""
 import argparse
 import json
 import os
@@ -7,16 +16,27 @@ import subprocess
 import sys
 
 
-SUITES = ("quick", "regression-1", "regression-2", "regression-3", "raw")
-LIGHT_WORKFLOWS = {
-    ".github/workflows/release.yml",
-    ".github/workflows/release-assets.yml",
-    ".github/workflows/interactive.yml",
+# regression 的类都在 quick 的范围内: 两套件跑的是同一批用例, quick 只是把它们分片并行。
+SUITES = ("quick", "regression", "raw")
+
+DOCUMENTATION_PREFIXES = ("docs/", "plans/", ".omo/", ".github/ISSUE_TEMPLATE/")
+
+# 构建元数据: 改这些等于改所有入口的产物与发布档。
+BUILD_METADATA_NAMES = {
+    "Directory.Build.props",
+    "Directory.Build.targets",
+    "Directory.Packages.props",
+    "global.json",
+    "NuGet.Config",
 }
+BUILD_METADATA_SUFFIXES = (".csproj", ".props", ".targets", ".slnx", ".sln")
+
+# 终端原始输入与 PTY 语义由 raw 套件在真实 TTY 上验证。
+RAW_MODE_PREFIXES = ("src/Dsh.Tui/", "src/Dsh.Pty/", "src/Dsh.PtyTerminal/")
 
 
 def is_documentation(path):
-    if path.startswith(("docs/", "plans/", ".omo/", ".github/ISSUE_TEMPLATE/")):
+    if path.startswith(DOCUMENTATION_PREFIXES):
         return True
     if path == ".github/PULL_REQUEST_TEMPLATE.md":
         return True
@@ -25,33 +45,57 @@ def is_documentation(path):
     )
 
 
+def is_build_metadata(path):
+    name = os.path.basename(path)
+    return name in BUILD_METADATA_NAMES or path.endswith(BUILD_METADATA_SUFFIXES)
+
+
 def classify_changes(paths, event, aot=False, full=False):
     """Return consumer selections; paths may name files that no longer exist."""
     full = full or event == "workflow_dispatch"
     suites = set(SUITES) if full else set()
     jit = full
     validate = full
+    android = full
     for path in paths:
-        workflow = path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml"))
-        if workflow or path == "scripts/select-ci.py" or path.startswith("tests/ci/"):
-            validate = True
-        if path.endswith((".csproj", ".props", ".targets")):
+        if is_build_metadata(path):
             suites.update(SUITES)
             jit = True
-        elif is_documentation(path) or path in LIGHT_WORKFLOWS:
+            android = True
             continue
-        elif path.startswith("tests/Dsh.Tests/"):
-            # This project owns the native raw tests and their shared fixtures.
-            suites.update(SUITES)
-        else:
+        if is_documentation(path):
+            continue
+        if path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml")):
+            validate = True
+            continue
+        if path == "scripts/select-ci.py" or path.startswith("tests/ci/"):
+            validate = True
+            continue
+        if path.startswith("src/Dsh.Android/"):
+            android = True
+            continue
+        if path.startswith("native/"):
             suites.update(SUITES)
             jit = True
+            continue
+        if path.startswith("tests/Dsh.Tests/"):
+            suites.update(("quick", "regression"))
+            # 终端原始输入的端到端回归由 raw 套件在真实 TTY 上跑。
+            if "RawMode" in path:
+                suites.add("raw")
+            continue
+        if path.startswith(RAW_MODE_PREFIXES):
+            suites.update(SUITES)
+            jit = True
+            continue
+        # 其余源码、脚本与未知路径: 覆盖最快的一道测试加发布校验。
+        suites.add("quick")
+        jit = True
     return {
         "tests": bool(suites),
         "jit": jit,
-        # The APK bundles the same shared assemblies the desktop entries publish,
-        # so it follows the JIT selection instead of keeping its own path rules.
-        "android": jit,
+        # The APK bundles the same shared assemblies the desktop entries publish.
+        "android": android or jit,
         "aot": jit and (aot if event == "workflow_dispatch" else event == "pull_request"),
         "validate": validate,
         "suites": [suite for suite in SUITES if suite in suites],

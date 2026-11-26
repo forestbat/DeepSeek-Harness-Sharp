@@ -92,12 +92,14 @@ public sealed class ApprovalService : Service, IApprovalService
 
     /**
      * 会话级授权: 只要该工具在本会话被「总是允许」过, 后续调用不再询问。
-     * 同样只看常驻尾窗: 尾窗外的授权查不到就再问一次, 方向是更保守而不是更松。
+     *
+     * 只认本会话自己的事件: fork 出来的会话带着父会话的历史, 但那是别的会话的授权, 不该跟着搬过来;
+     * 同一会话恢复时要认得自己此前的授权, 因此下界是继承条数而不是恢复点。
+     * 尾窗之外的授权查不到就再问一次, 方向是更保守而不是更松。
      */
     public static bool HasGrant(Session session, string toolName)
-        => session.LastResidentEventWhere(sessionEvent =>
-                sessionEvent.Seq >= session.InheritedEventCount
-                && sessionEvent.Data is ApprovalGrantedPayload payload
+        => session.LastOwnEventWhere(sessionEvent =>
+                sessionEvent.Data is ApprovalGrantedPayload payload
                 && string.Equals(payload.ToolName, toolName, StringComparison.Ordinal))
             is not null;
 

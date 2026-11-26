@@ -58,14 +58,23 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
         });
     }
 
+    /** 只等界面自身反应: 一条已连上的连接上做一次往返, 5 秒足够。 */
     private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(5);
+
+    /**
+     * 等一次**宿主重启后重建页面**: 停监听、释放后端、按同一个 home 重新组合、重连、再重建页面内容。
+     * 重新组合是真实宿主侧的工作(插件组合 + 首用 JIT), 与"界面多久响应"不是一回事。
+     * 取与 GuiTestEnvironment 的宿主往返同一个预算(30 秒), 并保持在 HeadlessGui 自己的 45 秒收尾预算之内 ——
+     * 内层等待不能比外层预算更长, 否则永远走不到。
+     */
+    private static readonly TimeSpan RestartArrival = TimeSpan.FromSeconds(30);
 
     /** Fast heartbeat and backoff, so a stopped host is noticed and the reconnect happens within the test. */
     private static readonly FleetOptions Options = FleetConnectionTests.TestOptions with { ClientName = "gui-workspace-test" };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task Dashboard_GroupsBothMachines_FiltersSearchesSorts_AndPaletteJumps()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -147,7 +156,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
         });
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task NotificationCenter_SyncsReadMarks_AnswersPendingOnce_AndNotifiesDesktop()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -226,7 +235,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
         });
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task PendingApproval_AnsweredFromNotifications_ReachesTheHost()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -400,7 +409,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
         });
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task HarnessSession_OpensMainChatView_InsteadOfSessionTranscript()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -477,7 +486,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
         Assert.Throws<ArgumentException>(() => NewSessionViewModel.ParseCommand("   "));
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task NewSession_OpenedBeforeConnection_EnablesTheSelectedMachineWithoutReselection_AndCancelsClosedForms()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -523,7 +532,7 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
      * Files, Git and machine management as workspace pages: files and Git open on the machine and project of the session in view and are rebuilt on the next link after the host restarts.
      * A Git worktree opens the new-session form there; saving a machine in machine management reconnects the workspace while the page stays in view.
      */
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task ContributedPages_FollowTheSessionAndTheConnection()
     {
         output.WriteLine("Contributed pages: preparing isolated hosts.");
@@ -562,9 +571,10 @@ public sealed class GuiWorkspaceTests(ITestOutputHelper output)
                 output.WriteLine("Contributed pages: files loaded; restarting the host.");
                 var firstLink = files.Content;
                 await alpha.RestartHostAsync(ct);
-                output.WriteLine("Contributed pages: host restarted; waiting for files to rebuild.");
-                await UntilAsync(() => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink), "files rebuilt on the new link");
-                output.WriteLine("Contributed pages: files rebuilt.");
+                await UntilAsync(
+                    () => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink),
+                    () => "files rebuilt on the new link: " + DescribePage(files, firstLink),
+                    RestartArrival);
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Git));
                 Assert.Null(files.Content);
@@ -669,18 +679,33 @@ private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) 
     }
 
     /** Polls on the UI thread, running the posted UI work between checks. */
-    internal static async Task UntilAsync(Func<bool> condition, string what)
+    internal static async Task UntilAsync(Func<bool> condition, string what, TimeSpan? budget = null)
+        => await UntilAsync(condition, () => what, budget);
+
+    /** Polls on the UI thread; the description is only evaluated when the wait times out. */
+    internal static async Task UntilAsync(Func<bool> condition, Func<string> describe, TimeSpan? budget = null)
     {
-        TestContext.Current.SendDiagnosticMessage($"Waiting for workspace condition: {what}");
-        var deadline = DateTime.UtcNow + Arrival;
+        var deadline = DateTime.UtcNow + (budget ?? Arrival);
         while (true)
         {
             Dispatcher.UIThread.RunJobs();
             if (condition())
                 return;
             if (DateTime.UtcNow > deadline)
-                throw new TimeoutException($"timed out waiting for {what}");
+                throw new TimeoutException($"timed out waiting for {describe()}");
             await Task.Delay(50, Ct);
         }
+    }
+
+    /** The page state behind "files rebuilt on the new link", so a timeout says what actually happened. */
+    private static string DescribePage(HostPageViewModel page, OperationViewModel? previous)
+    {
+        var content = page.Content;
+        var roots = content is FilesViewModel files
+            ? $"{files.Roots.Count} roots ({string.Join(", ", files.Roots.Select(root => root.Path))})"
+            : "n/a";
+        var connection = page.Content is null ? "-" : content!.GetType().Name;
+        return $"content={connection} same={ReferenceEquals(content, previous)} roots={roots} "
+            + $"opening={page.IsOpening} status={page.Status ?? "-"} machine={page.Machine} path={page.Path}";
     }
 }

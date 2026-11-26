@@ -118,7 +118,7 @@ public sealed class SessionWriteTicketTests : IDisposable
         var path = Path.Join(_root, "ticket.json");
         Assert.Equal(0, SessionWriteTicket.NextSeq(path, storedCount: 0, count: 1));
 
-        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             Assert.Equal(1, SessionWriteTicket.NextSeq(path, storedCount: 0, count: 1));
 
         Assert.Equal(2, SessionWriteTicket.Inspect(path)!.NextSeq);

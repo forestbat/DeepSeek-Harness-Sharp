@@ -677,6 +677,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             if (viewModel.SubmitCommand.ExecutionTask is { } submission)
                 await GuiTestEnvironment.PumpAsync(submission);
             Assert.Equal("", viewModel.Composer.Input);
+            // 文件引用按原样留在提示词里(正文由模型自己 read), 菜单选中后继续输入的提示词必须一起提交。
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
                 () => viewModel.Messages.Any(message => message.Kind == MessageKind.User && message.Text == prompt),
                 () => GuiTestEnvironment.DescribeChatState(viewModel));

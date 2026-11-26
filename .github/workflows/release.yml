@@ -7,6 +7,7 @@ name: 发布 Release（JIT + AOT）
 # JIT 资产保持 dsharp-<rid> 的旧名(远端自动部署按此名下载), AOT 资产带 -aot 后缀。
 # 发布说明由 GitHub 自动生成（--generate-notes），不在仓库里维护手写前端。
 # 测试只在 ci.yml 中运行；本工作流读取该 commit 的 CI 结果，只构建和发布测试通过的平台。
+# 需要"构建已成功但发布这一步失败"的补发时, 传 run_id 直接复用那次运行的产物, 不重建。
 on:
   push:
     tags:
@@ -25,6 +26,10 @@ on:
         description: '只构建与打包，不创建/更新 Release'
         type: boolean
         default: false
+      run_id:
+        description: '复用某次已完成运行的产物（该运行的提交必须就是 tag 指向的提交）；留空则重新构建'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -96,6 +101,8 @@ jobs:
       macos: ${{ steps.gate.outputs.macos }}
       android: ${{ steps.gate.outputs.android }}
       matrix: ${{ steps.gate.outputs.matrix }}
+      reuse: ${{ steps.gate.outputs.reuse }}
+      reuse_run_id: ${{ steps.gate.outputs.reuse_run_id }}
     steps:
       - id: gate
         name: 按平台读取 ci.yml 结果
@@ -107,6 +114,30 @@ jobs:
           REQUESTED: ${{ needs.prepare.outputs.requested }}
         run: |
           set -euo pipefail
+
+          # 复用模式: 产物必须来自 tag 指向的那次提交, 否则会把别的提交的二进制挂到这个版本上。
+          REUSE='${{ inputs.run_id }}'
+          if [ -n "$REUSE" ]; then
+            REUSE_SHA=$(gh api "repos/$REPOSITORY/actions/runs/$REUSE" --jq '.head_sha')
+            echo "reuse run $REUSE -> $REUSE_SHA; tag $SHA"
+            if [ "$REUSE_SHA" != "$SHA" ]; then
+              echo "::error::run $REUSE 构建的是 $REUSE_SHA, 不是 tag 指向的 $SHA"
+              exit 1
+            fi
+            {
+              echo "reuse=true"
+              echo "reuse_run_id=$REUSE"
+              echo "matrix=[]"
+              echo "windows=false"
+              echo "linux=false"
+              echo "macos=false"
+              echo "android=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "reuse=false" >> "$GITHUB_OUTPUT"
+          echo "reuse_run_id=" >> "$GITHUB_OUTPUT"
+
           RUN_ID=$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$SHA&per_page=100" \
             --jq '[.workflow_runs[] | select(.name == "构建校验" and .status == "completed")][0].id // empty')
           if [ -z "$RUN_ID" ]; then
@@ -410,7 +441,7 @@ jobs:
   release:
     name: 创建/更新 Release
     needs: [prepare, gate, build, android]
-    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && (needs.gate.outputs.matrix != '[]' || needs.gate.outputs.android == 'true') && needs.build.result != 'cancelled' && needs.android.result != 'cancelled' }}
+    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && (needs.gate.outputs.matrix != '[]' || needs.gate.outputs.android == 'true' || needs.gate.outputs.reuse == 'true') && needs.build.result != 'cancelled' && needs.android.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -420,10 +451,21 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - name: 取本次构建的产物
+        if: needs.gate.outputs.reuse != 'true'
+        uses: actions/download-artifact@v4
         with:
           pattern: dsharp-*
           path: dist
+
+      - name: 取既有运行的产物
+        if: needs.gate.outputs.reuse == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dsharp-*
+          path: dist
+          run-id: ${{ needs.gate.outputs.reuse_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 校验闸门判定要发布的产物都已到位
         shell: bash
