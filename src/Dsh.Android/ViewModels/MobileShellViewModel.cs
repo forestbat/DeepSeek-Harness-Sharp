@@ -241,10 +241,10 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private readonly PhoneToolStore _phoneToolStore;
     private readonly LocalAgentStore _localStore;
     private readonly MobileFleet _fleet;
-    private readonly DispatcherBridge<RemoteSessionEvent> _events;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly HashSet<string> _ignoredRequests = new(StringComparer.Ordinal);
     private CancellationTokenSource? _sessionLifetime;
+    private long _sessionNavigation;
     private PhoneMcpServer? _phoneServer;
     private LocalHarness? _local;
     private SubagentTranscript _transcript = new();
@@ -264,7 +264,6 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _localStore = localStore;
         _fleet = new MobileFleet(store);
         _fleet.Changed += OnFleetChanged;
-        _events = new DispatcherBridge<RemoteSessionEvent>(ApplyEvents);
         ShareInbox.Changed += DrainShares;
         DrainShares();
         var key = store.LoadPrivateKey();
@@ -566,7 +565,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     public async ValueTask DisposeAsync()
     {
         _fleet.Changed -= OnFleetChanged;
+        _sessionNavigation++;
         await _lifetime.CancelAsync();
+        await StopFollowingAsync();
         if (_local is not null)
         {
             _local.Changed -= OnLocalChanged;
@@ -1246,21 +1247,27 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private async Task RunTimelineCommandAsync(string command, bool reload)
     {
-        if (_openSessionId.Length == 0 || Find(_openMachine) is not { } link)
+        if (_openSessionId.Length == 0 || Find(_openMachine) is not { } link || _sessionLifetime is not { } lifetime)
             return;
+        var sessionId = _openSessionId;
+        var token = lifetime.Token;
         HasTimeline = false;
         try
         {
-            var lease = await link.WaitConnectedAsync(_lifetime.Token);
-            var result = await lease.Client.SessionEditing.ExecuteSessionCommandAsync(_openSessionId, command, _lifetime.Token);
+            var lease = await link.WaitConnectedAsync(token);
+            var result = await lease.Client.SessionEditing.ExecuteSessionCommandAsync(sessionId, command, token);
+            token.ThrowIfCancellationRequested();
             if (result.Text is { Length: > 0 } output)
                 Error = output;
             if (reload)
             {
-                await ReloadSnapshotAsync(link, _openSessionId, _lifetime.Token);
+                await ReloadSnapshotAsync(link, sessionId, token);
                 return;
             }
             RefreshFromFleet();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -1554,7 +1561,10 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private async Task OpenSessionAsync(SessionRowViewModel row)
     {
+        var navigation = ++_sessionNavigation;
         await StopFollowingAsync();
+        if (navigation != _sessionNavigation || _lifetime.IsCancellationRequested)
+            return;
         _openSessionId = row.Id;
         _openMachine = row.Machine;
         Page = MobilePage.Chat;
@@ -1569,6 +1579,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             return;
 
         var lifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var token = lifetime.Token;
         _sessionLifetime = lifetime;
         try
         {
@@ -1577,32 +1588,57 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
              * 从 0 订阅会让 host 把整段历史逐条回放一遍 —— 几千条事件挤在同一段流里,
              * 这才是长会话卡死和进入后一直下滑到不了底的来源, 快照那点数据量只是其中一小部分。
              */
-            var snapshot = await LoadSnapshotAsync(link, row.Id, SnapshotTailEvents, lifetime.Token);
+            var snapshot = await LoadSnapshotAsync(link, row.Id, SnapshotTailEvents, token);
             if (snapshot is null)
                 return;
-            await ApplySnapshotAsync(link, row.Id, snapshot.Events, lifetime.Token);
-            // 进来之后先在后台把更早的一截备好, 用户第一次上滑时数据已经在内存里。
-            var ready = await link.WaitConnectedAsync(lifetime.Token);
+            await ApplySnapshotAsync(row.Id, snapshot.Events, token);
+            token.ThrowIfCancellationRequested();
             StartOlderFeed();
-            var fromSeq = snapshot.Events.Count > 0 ? snapshot.Events[^1].Seq + 1 : 0;
-            await foreach (var item in link.SubscribeAsync(row.Id, fromSeq, lifetime.Token))
-            {
-                if (item.Reset)
-                {
-                    await ReloadSnapshotAsync(link, row.Id, lifetime.Token);
-                    continue;
-                }
-                _events.Enqueue(item);
-            }
+            await FollowSessionAsync(link, row.Id, NextSequence(snapshot), token);
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception error)
         {
-            Dispatcher.UIThread.Post(() => Error = $"无法读取会话: {error.Message}");
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!token.IsCancellationRequested)
+                    Error = $"无法读取会话: {error.Message}";
+            });
         }
     }
+
+    private async Task FollowSessionAsync(IMachineLink link, string sessionId, long fromSeq, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            using var stream = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var token = stream.Token;
+            var bridge = new DispatcherBridge<RemoteSessionEvent>(batch =>
+            {
+                if (!cancellationToken.IsCancellationRequested && !token.IsCancellationRequested)
+                    ApplyEvents(batch);
+            });
+            var reset = false;
+            await foreach (var item in link.SubscribeAsync(sessionId, fromSeq, token))
+            {
+                if (item.Reset)
+                {
+                    reset = true;
+                    await stream.CancelAsync();
+                    break;
+                }
+                bridge.Enqueue(item);
+            }
+            if (!reset || await ReloadSnapshotAsync(link, sessionId, cancellationToken) is not { } snapshot)
+                return;
+            fromSeq = NextSequence(snapshot);
+        }
+    }
+
+    private static long NextSequence(RemoteSessionSnapshot snapshot)
+        => snapshot.Events.Count == 0 ? snapshot.TotalEventCount : snapshot.Events[^1].Seq + 1;
 
     /** 取一截尾部历史; 失败时把错误显示出来并返回 null, 调用方据此停止后续动作。 */
     private async Task<RemoteSessionSnapshot?> LoadSnapshotAsync(IMachineLink link, string sessionId, int tailCount, CancellationToken cancellationToken)
@@ -1610,40 +1646,31 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         try
         {
             var lease = await link.WaitConnectedAsync(cancellationToken);
-            // 屏幕上只铺最后一截: 更早的交给后台预取, 不必在这一步等一整套历史下完。
-            var events = await FetchTailAsync(lease.Client, sessionId, tailCount, cancellationToken);
-            _totalEvents = events.Count > 0 ? events[^1].Seq + 1 : 0;
-            return new RemoteSessionSnapshot(default!, events, _totalEvents, null);
+            var total = await lease.Client.TotalEventCountAsync(sessionId, cancellationToken);
+            var snapshot = await lease.Client.GetSessionHistoryRangeAsync(
+                sessionId, Math.Max(0, total - tailCount), tailCount, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _totalEvents = snapshot.TotalEventCount;
+            return snapshot;
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
-            Dispatcher.UIThread.Post(() => Error = $"无法读取会话快照: {error.Message}");
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                    Error = $"无法读取会话快照: {error.Message}";
+            });
             return null;
         }
     }
 
-    /**
-     * 取末尾 count 条事件。
-     * 先问总数再定位: 总数用越界请求拿, 服务端只回一个数字, 不必传事件。
-     */
-    private static async Task<IReadOnlyList<SessionEvent>> FetchTailAsync(
-        RemoteHostClient client,
-        string sessionId,
-        int count,
-        CancellationToken cancellationToken)
-    {
-        var total = await client.TotalEventCountAsync(sessionId, cancellationToken);
-        if (total == 0)
-            return [];
-        var from = Math.Max(0, total - count);
-        return await FetchEventsAsync(client, sessionId, from, (int)Math.Min(count, total - from), cancellationToken);
-    }
-
-    private async Task ReloadSnapshotAsync(IMachineLink link, string sessionId, CancellationToken cancellationToken)
+    private async Task<RemoteSessionSnapshot?> ReloadSnapshotAsync(IMachineLink link, string sessionId, CancellationToken cancellationToken)
     {
         if (await LoadSnapshotAsync(link, sessionId, SnapshotTailEvents, cancellationToken) is not { } snapshot)
-            return;
-        await ApplySnapshotAsync(link, sessionId, snapshot.Events, cancellationToken);
+            return null;
+        ClearHistoryCaches();
+        await ApplySnapshotAsync(sessionId, snapshot.Events, cancellationToken);
+        return snapshot;
     }
 
     /** 停止跟随后台订阅并清空消息; 不动 SelectedSession, 供"换一个会话"与"返回列表"共用。 */
@@ -1651,21 +1678,28 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         var lifetime = _sessionLifetime;
         _sessionLifetime = null;
-        if (lifetime is not null)
-        {
-            await lifetime.CancelAsync();
-            lifetime.Dispose();
-        }
+        var cancellation = lifetime?.CancelAsync();
+        _olderFeed = null;
+        ClearHistoryCaches();
         _openSessionId = "";
+        _windowFirstSeq = 0;
+        _totalEvents = 0;
+        _renderedThroughSeq = 0;
         _transcript = new SubagentTranscript();
         Messages.Clear();
         Error = "";
         SendCommand.NotifyCanExecuteChanged();
+        if (cancellation is not null)
+            await cancellation;
+        lifetime?.Dispose();
     }
 
     private async Task CloseSessionAsync()
     {
+        var navigation = ++_sessionNavigation;
         await StopFollowingAsync();
+        if (navigation != _sessionNavigation)
+            return;
         SelectedSession = null;
         Page = MobilePage.Sessions;
         OnPropertyChanged(nameof(ChatTitle));
@@ -1708,12 +1742,22 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private void ApplyEvents(IReadOnlyList<RemoteSessionEvent> batch)
     {
         var changed = false;
+        var hasNewerEvents = false;
         Messages.Batch(() =>
         {
             foreach (var item in batch)
             {
-                if (item.Event is not { } sessionEvent)
+                if (item.SessionId != _openSessionId || item.Event is not { } sessionEvent)
                     continue;
+                if (sessionEvent.Seq < _renderedThroughSeq)
+                    continue;
+                _totalEvents = Math.Max(_totalEvents, sessionEvent.Seq + 1);
+                _newerExhausted = false;
+                if (sessionEvent.Seq > _renderedThroughSeq)
+                {
+                    hasNewerEvents = true;
+                    continue;
+                }
                 _transcript.Apply(sessionEvent, Messages);
                 MarkRendered(sessionEvent.Seq);
                 changed = true;
@@ -1723,7 +1767,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             _transcript.Flush();
             TrimWindow();
         });
-        if (!changed)
+        if (!changed && !hasNewerEvents)
             return;
         var now = DateTime.UtcNow;
         if ((now - _lastScrollRequest).TotalMilliseconds < MessageScrollThrottleMilliseconds)
@@ -1737,12 +1781,14 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
      * scrollToEnd=false 用于"跳转到某条"与"滑到更早": 那时要停在指定位置, 而不是被拉到末尾。
      */
     private async Task ApplySnapshotAsync(
-        IMachineLink link,
         string sessionId,
         IReadOnlyList<SessionEvent> events,
         CancellationToken cancellationToken,
         bool scrollToEnd = true)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (sessionId != _openSessionId)
+            return;
         // 调用方已经决定了这一截的范围, 这里不再二次裁剪, 否则以锚点开头的窗口会被砍掉锚点。
         var window = events.ToList();
         var model = SubagentTranscript.ModelBefore(events, 0);
@@ -1844,23 +1890,28 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         if (_openSessionId.Length == 0 || Find(_openMachine) is not { } link || IsLoadingOlder)
             return;
+        var sessionId = _openSessionId;
         IsLoadingOlder = true;
         try
         {
             var lease = await link.WaitConnectedAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            ClearHistoryCaches();
             // 与取窗口同时把锚点之后的备好, 而且在换窗之前就要等它到手:
             // 换窗之后才去取, 用户会先看到只有一两条消息、拖也拖不动的空窗, 等几百毫秒才补上来。
-            var prefetch = PrefetchNewerCoreAsync(lease.Client, CancellationToken.None, fromOverride: anchorSeq);
+            var prefetch = PrefetchNewerCoreAsync(lease.Client, cancellationToken, fromOverride: anchorSeq);
             // 锚点落在窗口中部: 上下各留出半窗, 滚到锚点之后不会立刻又碰到某一端。
             // 事件序号就是它在历史里的下标(Seq 从 0 连续递增), 因此可以直接当下标用。
             var from = Math.Max(0, anchorSeq - WindowCenterOffset);
-            var events = await FetchEventsAsync(lease.Client, _openSessionId, from, WindowEvents, cancellationToken);
+            var events = await FetchEventsAsync(lease.Client, sessionId, from, WindowEvents, cancellationToken);
             if (events.Count == 0)
                 return;
-            _totalEvents = (await lease.Client.TotalEventCountAsync(_openSessionId, cancellationToken));
+            var total = await lease.Client.TotalEventCountAsync(sessionId, cancellationToken);
             await prefetch;
+            cancellationToken.ThrowIfCancellationRequested();
+            _totalEvents = total;
             // 这一截是为了停在锚点上, 渲染完不要被拉到末尾。
-            await ApplySnapshotAsync(link, _openSessionId, events, cancellationToken, scrollToEnd: false);
+            await ApplySnapshotAsync(sessionId, events, cancellationToken, scrollToEnd: false);
             ScrollToSeqRequested?.Invoke(anchorSeq);
             // 往上那一侧的数据由后台补齐。
             StartOlderFeed();
@@ -1875,40 +1926,13 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    /**
-     * 从 from 起取够 count 条事件。
-     * 按条数要, 不按字节: 服务端按字节切时一页能塞进上千条, 传回来只用前一百条, 其余白下载白反序列化。
-     * 一页不够就继续往后要, 直到条数够或者到了历史末尾。
-     */
     private static async Task<IReadOnlyList<SessionEvent>> FetchEventsAsync(
         RemoteHostClient client,
         string sessionId,
         long from,
         int count,
         CancellationToken cancellationToken)
-    {
-        var events = new List<SessionEvent>();
-        var cursor = from;
-        var pages = 0;
-        var network = 0L;
-        var clock = Stopwatch.StartNew();
-        while (events.Count < count)
-        {
-            var before = clock.ElapsedMilliseconds;
-            var page = await client.GetSessionSnapshotRangeAsync(sessionId, cursor, count - events.Count, cancellationToken);
-            network += clock.ElapsedMilliseconds - before;
-            pages += 1;
-            if (page.Events.Count == 0)
-                break;
-            events.AddRange(page.Events);
-            cursor = page.Events[^1].Seq + 1;
-            // 取到历史末尾就没有下一页了。
-            if (cursor >= page.TotalEventCount)
-                break;
-        }
-        MobileLog.Info($"fetch-events: pages={pages} got={events.Count} want={count} net={network}ms total={clock.ElapsedMilliseconds}ms");
-        return events;
-    }
+        => (await client.GetSessionHistoryRangeAsync(sessionId, from, count, cancellationToken).ConfigureAwait(false)).Events;
 
     /** 已取到的窗口前面还有历史, 且当前没在取。 */
     public bool CanLoadOlder => !IsLoadingOlder && _windowFirstSeq > 0;
@@ -1995,6 +2019,16 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private readonly List<SessionEvent> _cachedOlder = [];
 
     private readonly List<SessionEvent> _cachedNewer = [];
+    private long _historyGeneration;
+
+    private void ClearHistoryCaches()
+    {
+        Interlocked.Increment(ref _historyGeneration);
+        lock (_cachedOlder)
+            _cachedOlder.Clear();
+        lock (_cachedNewer)
+            _cachedNewer.Clear();
+    }
 
     /** 更早那一侧的缓存深度; 往下那一侧不设深度, 它天然只到历史末尾。 */
     private int OlderCachedCount
@@ -2068,9 +2102,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
      */
     private void StartOlderFeed()
     {
-        if (_olderFeed is { IsCompleted: false })
+        if (_sessionLifetime is not { } lifetime || _olderFeed is { IsCompleted: false })
             return;
-        _olderFeed = FeedOlderAsync(_olderFeedLifetime.Token);
+        _olderFeed = FeedOlderAsync(lifetime.Token);
     }
 
     private async Task FeedOlderAsync(CancellationToken cancellationToken)
@@ -2094,10 +2128,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
                 await Task.Delay(FeedIdleMilliseconds, cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (Exception error) when (error is not OperationCanceledException or ObjectDisposedException)
+        catch (Exception error) when (error is not OperationCanceledException)
         {
             // 后台取数失败不打扰用户: 下次滑动会把后台再叫醒。
-            _olderFeed = null;
         }
     }
 
@@ -2106,6 +2139,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         if (Find(_openMachine) is not { } link)
             return false;
+        var generation = Interlocked.Read(ref _historyGeneration);
         var lease = await link.WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
         long cursor;
         lock (_cachedOlder)
@@ -2123,6 +2157,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             return false;
         lock (_cachedOlder)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (generation != Interlocked.Read(ref _historyGeneration))
+                return false;
             _cachedOlder.InsertRange(0, events.Where(item => item.Seq < cursor && item.Seq < _windowFirstSeq));
         }
         var cost = clock.ElapsedMilliseconds;
@@ -2136,8 +2173,6 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     /** 后台取数任务; 同一时间只跑一个。 */
     private Task? _olderFeed;
-
-    private readonly CancellationTokenSource _olderFeedLifetime = new();
 
     /** 缓存够深时后台歇多久再看一眼。 */
     private const int FeedIdleMilliseconds = 200;
@@ -2158,6 +2193,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             _cachedOlder.RemoveAll(item => item.Seq >= _windowFirstSeq);
             if (_cachedOlder.Count == 0)
                 return [];
+            if (_cachedOlder[^1].Seq + 1 != _windowFirstSeq)
+            {
+                _cachedOlder.Clear();
+                return [];
+            }
             // 只交出一截(靠近窗口的那一端), 剩下的留在缓存里给下次上滑用。
             var take = _cachedOlder.Count <= OlderChunkEvents ? [.. _cachedOlder] : _cachedOlder.GetRange(_cachedOlder.Count - OlderChunkEvents, OlderChunkEvents);
             _cachedOlder.RemoveRange(_cachedOlder.Count - take.Count, take.Count);
@@ -2177,6 +2217,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             _cachedNewer.RemoveAll(item => item.Seq < _renderedThroughSeq);
             if (_cachedNewer.Count == 0)
                 return [];
+            if (_cachedNewer[0].Seq != _renderedThroughSeq)
+            {
+                _cachedNewer.Clear();
+                return [];
+            }
             // 靠窗口的这一端先交出去。
             var take = _cachedNewer.Count <= OlderChunkEvents ? [.. _cachedNewer] : _cachedNewer.GetRange(0, OlderChunkEvents);
             _cachedNewer.RemoveRange(0, take.Count);
@@ -2258,9 +2303,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private async Task PrefetchNewerCoreAsync(RemoteHostClient client, CancellationToken cancellationToken, long? fromOverride = null)
     {
-        if (_prefetchNewerBusy)
+        if (_prefetchNewerBusy || _sessionLifetime is not { } session)
             return;
         _prefetchNewerBusy = true;
+        var generation = Interlocked.Read(ref _historyGeneration);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, session.Token);
         try
         {
             long from;
@@ -2272,18 +2319,23 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
                     return;
                 from = fromOverride ?? (_cachedNewer.Count > 0 ? _cachedNewer[^1].Seq + 1 : _renderedThroughSeq);
             }
-            var events = await FetchEventsAsync(client, _openSessionId, from, PrefetchBatchEvents, cancellationToken);
+            var events = await FetchEventsAsync(client, _openSessionId, from, PrefetchBatchEvents, linked.Token);
             if (events.Count == 0)
                 return;
             var floor = fromOverride ?? _renderedThroughSeq;
             lock (_cachedNewer)
             {
+                if (linked.IsCancellationRequested || generation != Interlocked.Read(ref _historyGeneration))
+                    return;
                 foreach (var item in events.Where(item => item.Seq >= floor))
                     _cachedNewer.Add(item);
             }
             MobileLog.Info($"prefetch newer: from={from} got={_cachedNewer.Count} through={_renderedThroughSeq}");
         }
-        catch (Exception error) when (error is not OperationCanceledException or ObjectDisposedException)
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
+        {
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
         {
         }
         finally
@@ -2369,17 +2421,25 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     /** 跳到某个序号: 不在当前窗口就把窗口挪过去, 不再提示"不在已载入的记录里"。 */
     public async Task JumpToSeqAsync(long seq)
     {
+        if (_sessionLifetime is not { } session)
+            return;
+        var cancellationToken = session.Token;
         // 窗口同一时刻只能有一个改动者: 装载进行中时 Messages 正在变, 这时判断"在不在窗口里"会得出
         // 错误的结论, 而且窗口重取会被正在进行的装载挡掉, 跳转就静默失效了。
         await _windowGate.WaitAsync(_lifetime.Token);
         try
         {
+            if (cancellationToken.IsCancellationRequested)
+                return;
             var low = Messages.FirstOrDefault()?.Seq ?? 0;
             var high = Messages.LastOrDefault(message => message.Seq is not null)?.Seq ?? 0;
             if (Messages.Count == 0 || seq < low || seq > high)
-                await LoadWindowAroundAsync(seq, _lifetime.Token);
+                await LoadWindowAroundAsync(seq, cancellationToken);
             else
                 ScrollToSeqRequested?.Invoke(seq);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         finally
         {
