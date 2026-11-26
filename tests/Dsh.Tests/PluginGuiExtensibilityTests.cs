@@ -32,6 +32,110 @@ public sealed class PluginGuiExtensibilityTests
     private const int CollectionRounds = 60;
 
     [Fact]
+    public async Task Workbench_BackgroundRegistrationDoesNotWaitForUi_AndRestoresThePreviousSlot() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+        try
+        {
+            window.Show();
+            var viewModel = window.ViewModel!;
+            viewModel.ShowChatCommand.Execute(null);
+            var workbench = viewModel.Workbench;
+            var originalBuilds = 0;
+            using var original = workbench.RegisterChatHeaderItem("overlap", context =>
+            {
+                originalBuilds++;
+                return new Button { Content = context.SessionId };
+            });
+            Render(window);
+            var initial = Assert.Single(workbench.ChatHeaderItems, item => item.Id == "overlap").Content;
+            workbench.NotifySessionChanged();
+            Assert.Same(initial, Assert.Single(workbench.ChatHeaderItems, item => item.Id == "overlap").Content);
+            Assert.Equal(1, originalBuilds);
+
+            // Keep the dispatcher occupied until the worker returns the registration handle.
+            using var replacement = Task.Run(() => workbench.RegisterChatHeaderItem("overlap", _ =>
+            {
+                Assert.True(Dispatcher.UIThread.CheckAccess());
+                return new Button { Content = "replacement" };
+            })).WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+            Assert.Same(initial, Assert.Single(workbench.ChatHeaderItems, item => item.Id == "overlap").Content);
+
+            Render(window);
+            var host = Assert.Single(window.GetVisualDescendants().OfType<ItemsControl>(), control => control.Name == "PluginChatHeaderHost");
+            Assert.True(FindControlByText<Button>(host, "replacement").IsEffectivelyVisible);
+            replacement.Dispose();
+            Render(window);
+            Assert.True(FindControlByText<Button>(host, viewModel.CurrentSessionId.Value).IsEffectivelyVisible);
+            Assert.Equal(2, originalBuilds);
+        }
+        finally
+        {
+            window.Close();
+            await window.ViewModel!.DisposeAsync();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Fact]
+    public async Task Workbench_PageReplacementReleasesTheOldTreeOnce_AndRestoresTheBuiltInPage() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+        try
+        {
+            window.Show();
+            var workspace = window.ViewModel!.Workspace;
+            var defaults = workspace.Pages.Available.Single(page => page.Id == WorkspacePages.Machines);
+            var probe = new DisposalProbe();
+            var content = new ContentControl { Content = new TextBlock { Text = "plugin content" }, DataContext = probe };
+            var items = new ItemsControl { ItemsSource = new[] { "plugin item" }, DataContext = probe };
+            var page = new DisposablePage { Children = { content, items }, DataContext = probe };
+
+            using var first = window.ViewModel.Workbench.RegisterPage(WorkspacePages.Machines, "first", _ => new TextBlock { Text = "first page" });
+            using var replacement = window.ViewModel.Workbench.RegisterPage(WorkspacePages.Machines, "replacement", _ => page);
+            workspace.OpenPage(workspace.Pages.Available.Single(entry => entry.Id == WorkspacePages.Machines));
+            Render(window);
+            Assert.True(page.IsEffectivelyVisible);
+
+            replacement.Dispose();
+            Assert.Equal(1, page.Disposals);
+            Assert.Equal(1, probe.Disposals);
+            Assert.False(page.IsAttachedToVisualTree());
+            Assert.Empty(page.Children);
+            Assert.Null(content.Content);
+            Assert.Null(items.ItemsSource);
+            Assert.Equal("first", workspace.ActivePage?.Label);
+
+            first.Dispose();
+            Render(window);
+            Assert.Same(defaults, workspace.ActivePage);
+            Assert.Same(defaults, workspace.Pages.Available.Single(entry => entry.Id == WorkspacePages.Machines));
+            Assert.True(Assert.Single(window.GetVisualDescendants().OfType<MachinesView>()).IsEffectivelyVisible);
+            Assert.Equal(1, page.Disposals);
+        }
+        finally
+        {
+            window.Close();
+            await window.ViewModel!.DisposeAsync();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    private sealed class DisposablePage : StackPanel, IDisposable
+    {
+        public int Disposals { get; private set; }
+        public void Dispose() => Disposals++;
+    }
+
+    private sealed class DisposalProbe : IDisposable
+    {
+        public int Disposals { get; private set; }
+        public void Dispose() => Disposals++;
+    }
+
+    [Fact]
     public async Task ManagedGuiPlugin_HotAdd_CustomizesAllPartialSlots_AndInteractsWithLiveWindow() => await HeadlessGui.RunAsync(async () =>
     {
         using var artifacts = new TempArtifactFolder();
@@ -469,6 +573,10 @@ public sealed class PluginGuiExtensibilityTests
                     var panel = new StackPanel();
                     panel.Children.Add(new TextBlock { Text = model.Text });
                     panel.Children.Add(new Button { Content = model.FocusLabel });
+                    panel.Children.Add(new ContentControl
+                    {
+                        Content = new ItemsControl { ItemsSource = new[] { new SampleConfig() } }
+                    });
                     return panel;
                 }
 

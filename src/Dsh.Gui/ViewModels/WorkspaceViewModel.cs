@@ -101,10 +101,22 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     [ObservableProperty]
     private object? _pageContent;
 
+    private WorkspacePageEntry? _contentPage;
+
     partial void OnPageContentChanged(object? oldValue, object? newValue)
     {
-        if (oldValue is IDisposable disposable)
-            disposable.Dispose();
+        var previous = _contentPage;
+        _contentPage = newValue is null ? null : ActivePage;
+        if (oldValue is null)
+            return;
+        try
+        {
+            previous?.DetachContent?.Invoke(oldValue);
+        }
+        finally
+        {
+            (oldValue as IDisposable)?.Dispose();
+        }
     }
 
     [ObservableProperty]
@@ -211,7 +223,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         var context = _pageContext?.Invoke() ?? new WorkspacePageContext(ActiveSession?.Machine, ActiveSession?.Card.ProjectPath);
         if (entry.Id == WorkspacePages.Git && GitWorkspacePath is { Length: > 0 } explicitGitPath)
             context = new(GitWorkspaceMachine ?? context.Machine, explicitGitPath);
-        var content = entry.Create(context);
+        if (entry.Create(context) is not { } content)
+            return;
         ActivePage = entry;
         NavigationRequested?.Invoke(WorkspaceDestination.Page);
         PageContent = content;

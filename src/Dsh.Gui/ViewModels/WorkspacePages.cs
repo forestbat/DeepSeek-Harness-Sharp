@@ -10,7 +10,7 @@ public sealed record WorkspacePageContext(string? Machine, string? ProjectPath);
  * A page another module contributes to the workspace navigation, such as files, Git or machine management.
  * The factory returns the page content: a control, or a view model for which the contributing module registers a data template.
  */
-public sealed class WorkspacePageEntry(string id, string label, Geometry icon, Func<WorkspacePageContext, object> factory)
+public sealed class WorkspacePageEntry(string id, string label, Geometry icon, Func<WorkspacePageContext, object?> factory)
 {
     public string Id { get; } = id;
 
@@ -18,7 +18,9 @@ public sealed class WorkspacePageEntry(string id, string label, Geometry icon, F
 
     public Geometry Icon { get; } = icon;
 
-    public object Create(WorkspacePageContext context) => factory(context);
+    internal Action<object>? DetachContent { get; init; }
+
+    public object? Create(WorkspacePageContext context) => factory(context);
 }
 
 /**
@@ -30,6 +32,8 @@ public sealed class WorkspacePages
     public const string Files = "files";
     public const string Git = "git";
     public const string Machines = "machines";
+
+    private readonly Dictionary<string, WorkspacePageEntry> _defaults = new(StringComparer.Ordinal);
 
     public ObservableCollection<WorkspacePageEntry> Available { get; } = [];
 
@@ -46,10 +50,13 @@ public sealed class WorkspacePages
     /** Inserts a default host page at its canonical slot unless a plugin already supplied that id. */
     public void RegisterDefault(int index, WorkspacePageEntry entry)
     {
+        _defaults[entry.Id] = entry;
         if (Available.Any(item => item.Id == entry.Id))
             return;
         Available.Insert(Math.Clamp(index, 0, Available.Count), entry);
     }
+
+    internal WorkspacePageEntry? FindDefault(string id) => _defaults.GetValueOrDefault(id);
 
     /** Removes the contributed page with the given id when its owning plugin deactivates. */
     public bool Remove(string id)

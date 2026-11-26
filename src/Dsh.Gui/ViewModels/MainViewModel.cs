@@ -107,6 +107,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _updatingSuggestions;
     private bool _commandSuggestionsLoaded;
     private CancellationTokenSource? _suggestionCancellation;
+    private readonly bool _ownsWorkbench;
+    private static readonly IReadOnlyList<string> PluginSubcommands = ["list", "doctor", "add", "remove", "disable", "enable", "reload"];
 
     /** Local chat lifecycle and all session mutations belong to the persistent Host. */
     public MainViewModel(HarnessApp app, HostChatSession chat)
@@ -115,7 +117,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _maintenance = _ctx.Get<IContextMaintenancePresenter>(IContextMaintenancePresenter.ServiceName, false);
         _chat = chat;
         _pluginCoordinator = new GuiPluginCoordinator(_ctx, chat);
-        Workbench = _ctx.Get<GuiWorkbench>(GuiWorkbench.ServiceName, false) ?? new GuiWorkbench();
+        var workbench = _ctx.Get<GuiWorkbench>(GuiWorkbench.ServiceName, false);
+        _ownsWorkbench = workbench is null;
+        Workbench = workbench ?? new GuiWorkbench();
         Home = app.Home;
         Subagents = new SubagentPanelViewModel(chat);
         Subagents.Changed += PopulateSubagentCards;
@@ -1338,6 +1342,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _disposed = true;
         Workbench.DetachViewModel(this);
+        if (_ownsWorkbench)
+            Workbench.Dispose();
         _activityTimer.Stop();
         _subagentWatch.Stop();
         Subagents.Changed -= SyncSubagentWatch;
@@ -2750,12 +2756,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private IReadOnlyList<string> PluginCandidates(string argument)
     {
         var space = argument.IndexOf(' ', StringComparison.Ordinal);
-        string[] subcommands = ["list", "doctor", "add", "remove", "disable", "enable", "reload"];
-        if (space < 0 && !subcommands.Skip(3).Contains(argument, StringComparer.Ordinal))
-            return subcommands;
         var action = space < 0 ? argument : argument[..space];
         if (action is not ("remove" or "disable" or "enable" or "reload"))
-            return [];
+            return space < 0 ? PluginSubcommands : [];
         var packages = _ctx.Get<HarnessPluginManager>("pluginManager", false)?.PackageNames
             ?? [.. Preferences.Plugins.Select(item => item.Package)];
         return [.. packages.Select(package => $"{action} {package}")];
