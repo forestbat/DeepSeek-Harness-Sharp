@@ -17,6 +17,40 @@ public sealed class ServiceProtocolTests
     }
 
     [Fact]
+    public void SharedServiceOperationsKeepFileTransferFormsOutOfStreamPreparation()
+    {
+        var operations = Ma2aServiceOperations.All;
+        var directTransfers = operations.Where(operation => !operation.HasRequestBody).ToArray();
+
+        Assert.Equal(new[] { "download", "upload" }, directTransfers.Select(operation => operation.Name));
+        Assert.All(directTransfers, operation =>
+        {
+            Assert.Equal("transfer", operation.Family);
+            Assert.Null(operation.ToolName);
+            Assert.Contains(operation.FormFields, field => field.Name == "local_path");
+        });
+        Assert.False(directTransfers[0].IsMutation);
+        Assert.True(directTransfers[1].IsMutation);
+    }
+
+    [Fact]
+    public void ProcessLogCursorKeepsItsDifferentFormAndToolDefaults()
+    {
+        const string id = "00000000000000000000000000000001";
+        var definition = Ma2aServiceOperations.All.Single(operation => operation.ToolName == "process.logs");
+        var cursor = definition.FormFields.Single(field => field.Name == "cursor");
+        var form = definition.BuildFormRequest(new Dictionary<string, JsonNode?>
+        {
+            ["process_id"] = id, ["cursor"] = cursor.InitialNumber,
+        });
+        var tool = definition.BuildToolRequest(new JsonObject { ["id"] = id });
+
+        Assert.True(JsonNode.DeepEquals(Ma2aServiceRequests.ProcessLogs(id, cursor: 0), form));
+        Assert.True(JsonNode.DeepEquals(Ma2aServiceRequests.ProcessLogs(id), tool));
+        Assert.False(JsonNode.DeepEquals(tool, form));
+    }
+
+    [Fact]
     public void ByteStringsAndLargeUnsignedIntegersRemainLossless()
     {
         var value = new JsonArray(ulong.MaxValue, Ma2aCbor.Bytes(new byte[] { 0, 255, 128 }), "终端");

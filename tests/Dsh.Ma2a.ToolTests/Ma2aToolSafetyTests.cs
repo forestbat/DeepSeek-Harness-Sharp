@@ -84,6 +84,25 @@ public sealed class Ma2aToolSafetyTests : IDisposable
     }
 
     [Fact]
+    public async Task PrepareKeepsThePublishedRenameFieldsAndMatchesTheDesktopRequest()
+    {
+        var definition = Ma2aServiceOperations.All.Single(operation => operation.ToolName == "files.rename");
+        var result = await ExecuteAsync("ma2a_service_prepare", new JsonObject
+        {
+            ["operation"] = "files.rename",
+            ["arguments"] = new JsonObject { ["path"] = "data:/old", ["destination"] = "data:/new", ["replace"] = true },
+        });
+        var success = Assert.IsType<ToolExecutionResult.Success>(result);
+        var form = definition.BuildFormRequest(new Dictionary<string, JsonNode?>
+        {
+            ["from"] = "data:/old", ["to"] = "data:/new", ["replace"] = true,
+        });
+
+        Assert.Equal("files", success.Value.GetProperty("service").GetString());
+        Assert.True(JsonNode.DeepEquals(form, JsonNode.Parse(success.Value.GetProperty("body").GetRawText())));
+    }
+
+    [Fact]
     public async Task LocalCommandDescriptionPreservesReplayPolicyAndTypedFields()
     {
         var result = await ExecuteAsync("ma2a_describe", new JsonObject { ["operation"] = "space_grant" });
