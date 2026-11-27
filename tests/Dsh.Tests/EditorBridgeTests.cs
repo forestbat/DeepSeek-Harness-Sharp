@@ -195,6 +195,9 @@ public sealed class EditorBridgeTests
             finally { retired.TrySetResult(); }
         });
         var registration = await connection.Client.Editor.RegisterClientAsync(local, Ct, request => request);
+        await using var otherConnection = await Connection.CreateAsync(server, Ct);
+        var otherDesktop = new RecordingService();
+        await using var otherRegistration = await otherConnection.Client.Editor.RegisterClientAsync(otherDesktop, Ct, value => value);
         await connection.Client.Editor.SelectForSessionAsync("disconnect-session", Ct);
         var request = new EditorRequest { WorkspaceRoot = core.Root, SessionId = "disconnect-session", ExecutionTarget = EditorExecutionTarget.Client };
         var open = clients.LaunchAsync(request, Ct).AsTask();
@@ -202,8 +205,9 @@ public sealed class EditorBridgeTests
         await connection.DisposeAsync();
         await retired.Task.WaitAsync(Ct);
         Assert.Equal(EditorErrorCode.CLIENT_UNAVAILABLE, (await open).Error);
-        Assert.Empty(clients.Clients);
+        Assert.Single(clients.Clients);
         Assert.Equal(EditorErrorCode.CLIENT_UNAVAILABLE, (await clients.LaunchAsync(request, Ct)).Error);
+        Assert.Empty(otherDesktop.Requests);
         // Registration lifetime can end after its connection without sending another RPC.
         await registration.DisposeAsync();
     }
@@ -211,7 +215,7 @@ public sealed class EditorBridgeTests
     [Fact(Timeout = 10000)]
     public async Task EditorRetirementDuringUnregisterDoesNotFailTheRegistrationDisposal()
     {
-        await using var core = await RemoteHostCapabilityTests.FakeBackend.CreateAsync(Ct);
+        await using var core = await RemoteHostCapabilityTests.FakeBackend.CreateAsync(TestContext.Current.CancellationToken);
         using var clients = new EditorClientDispatcher();
         var server = new RemoteHostServer(new("editor-test-token"), new Backend(core, new EditorBackend(new RecordingService(), clients, core.Files.Policy)));
         await using var connection = await Connection.CreateAsync(server, Ct);
@@ -249,6 +253,23 @@ public sealed class EditorBridgeTests
         Assert.Equal(EditorErrorCode.CLIENT_UNAVAILABLE, (await open.WaitAsync(Ct)).Error);
         Assert.Empty(clients.Clients);
         Assert.True(await connection.Client.PingAsync(Ct) > 0);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task RegistrationCanRetireAfterEditorDisposalWhileConnectionRemainsOpen()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var core = await RemoteHostCapabilityTests.FakeBackend.CreateAsync(cancellationToken);
+        using var clients = new EditorClientDispatcher();
+        var server = new RemoteHostServer(new("editor-test-token"), new Backend(core, new EditorBackend(new RecordingService(), clients, core.Files.Policy)));
+        await using var connection = await Connection.CreateAsync(server, cancellationToken);
+        var registration = await connection.Client.Editor.RegisterClientAsync(new RecordingService(), cancellationToken, value => value);
+
+        await connection.Client.Editor.DisposeAsync();
+        await registration.DisposeAsync();
+        await registration.DisposeAsync();
+
+        Assert.True(await connection.Client.PingAsync(cancellationToken) > 0);
     }
 
     [Fact(Timeout = 10000)]

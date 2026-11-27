@@ -304,5 +304,9 @@ public sealed class SubagentViewModelTests
         Assert.Contains(card.SubagentStream, message => message.Kind == MessageKind.Tool && message.ArgumentText.Contains("inline-live"));
         Assert.Contains(card.SubagentStream, message => message.Kind == MessageKind.Result && message.Text.Contains("inline-live-out"));
         Assert.Contains(card.SubagentStream, message => message.Text.Contains("child-out"));
+
+        // Let any in-flight history read finish before closing the local transport and deleting the session.
+        viewModel.Subagents.Dispose();
+        await viewModel.Subagents.RefreshAsync();
     });
 }

@@ -18,6 +18,8 @@ internal static class PluginCodecInitializer
     [ModuleInitializer]
     internal static void Initialize()
     {
+        if (typeof(PluginCodecInitializer).Assembly.IsCollectible)
+            return;
         AppDomain.CurrentDomain.AssemblyLoad += (_, loaded) => Register(loaded.LoadedAssembly);
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             Register(assembly);
@@ -25,6 +27,8 @@ internal static class PluginCodecInitializer
 
     private static void Register(Assembly assembly)
     {
+        if (assembly.IsCollectible)
+            return;
         var name = assembly.GetName().Name;
         if (name is null || !name.StartsWith("Dsh.", StringComparison.Ordinal) || name == "Dsh.Tests")
             return;
