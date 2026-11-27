@@ -8,6 +8,7 @@ riderModule.iml
 /artifacts*/
 /tests/.scratch/
 /.daemon-tests
+/.uds/
 /plans
 /.idea
 /.kilo
