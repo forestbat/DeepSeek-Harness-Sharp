@@ -26,14 +26,16 @@ public sealed class Ma2aGuiTests
             Assert.Skip("The control socket fixture uses a Unix domain socket.");
             return;
         }
-        var directory = TempTree.CreateSocketDirectory("mwc");
+        var directory = TempTree.CreateCompactSocketDirectory();
         try
         {
             await HeadlessGui.RunAsync(async () =>
             {
                 var control = Directory.CreateDirectory(Path.Combine(directory, "run-v1"));
+                var socketPath = Path.Combine(control.FullName, "control.sock");
+                TempTree.AssertFitsMacOsSocketLimit(socketPath);
                 using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                listener.Bind(new UnixDomainSocketEndPoint(Path.Combine(control.FullName, "control.sock")));
+                listener.Bind(new UnixDomainSocketEndPoint(socketPath));
                 listener.Listen(1);
                 using var model = new Ma2aViewModel { StateDirectory = directory };
                 var cancellationToken = TestContext.Current.CancellationToken;
