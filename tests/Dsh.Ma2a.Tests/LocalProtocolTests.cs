@@ -16,6 +16,7 @@ public sealed class LocalProtocolTests
     private const ulong SnapshotCorrelation = 7;
     private const string WindowsPipeSkipReason = "Windows named pipe identities require Windows.";
     private const string SnapshotBoot = "00000000000000000000000000000001";
+    private static readonly TimeSpan WindowsPipeTestDeadline = TimeSpan.FromSeconds(15);
 
     [Fact]
     [Trait("Platform", "WindowsOnly")]
@@ -51,8 +52,10 @@ public sealed class LocalProtocolTests
             Assert.Skip(WindowsPipeSkipReason);
             return;
         }
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(WindowsPipeTestDeadline);
+        var cancellationToken = deadline.Token;
         var root = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}"));
-        var cancellationToken = TestContext.Current.CancellationToken;
         try
         {
             var statePath = Path.Combine(root.FullName, "MixedCaseState");
@@ -67,9 +70,11 @@ public sealed class LocalProtocolTests
 
             await using var client = await connecting;
             await server.WaitForConnectionAsync(cancellationToken);
-            await client.WriteAsync("state ready"u8.ToArray(), cancellationToken);
             var received = new byte["state ready"u8.Length];
-            await server.ReadExactlyAsync(received, cancellationToken);
+            // Start reading before writing because the pipe may not buffer the payload.
+            var reading = server.ReadExactlyAsync(received, cancellationToken).AsTask();
+            var writing = client.WriteAsync("state ready"u8.ToArray(), cancellationToken).AsTask();
+            await Task.WhenAll(reading, writing);
             Assert.Equal("state ready", Encoding.UTF8.GetString(received));
         }
         finally { root.Delete(recursive: true); }
