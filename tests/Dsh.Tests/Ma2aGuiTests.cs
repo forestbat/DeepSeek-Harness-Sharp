@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -14,6 +15,45 @@ namespace Dsh.Tests;
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class Ma2aGuiTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Platform", "UnixOnly")]
+    public async Task ChangingTheAttachmentCancelsAQuietPeer(bool changeDirectory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("The control socket fixture uses a Unix domain socket.");
+            return;
+        }
+        var directory = TempTree.CreateSocketDirectory("mwc");
+        try
+        {
+            await HeadlessGui.RunAsync(async () =>
+            {
+                var control = Directory.CreateDirectory(Path.Combine(directory, "run-v1"));
+                using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                listener.Bind(new UnixDomainSocketEndPoint(Path.Combine(control.FullName, "control.sock")));
+                listener.Listen(1);
+                using var model = new Ma2aViewModel { StateDirectory = directory };
+                var cancellationToken = TestContext.Current.CancellationToken;
+                var connecting = model.ConnectCommand.ExecuteAsync(null);
+                using var accepted = await listener.AcceptAsync(cancellationToken);
+                using var stream = new NetworkStream(accepted);
+                Assert.Equal(1, await stream.ReadAsync(new byte[1], cancellationToken));
+                Assert.False(connecting.IsCompleted);
+
+                if (changeDirectory) model.StateDirectory = Path.Combine(directory, "replacement");
+                else model.DisconnectCommand.Execute(null);
+
+                await connecting.WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
+                Assert.True(model.ConnectCommand.CanExecute(null));
+                Assert.False(model.Connected);
+            });
+        }
+        finally { TempTree.Delete(directory); }
+    }
+
     [Fact]
     public async Task NativeManagementForms_RenderNestedAgentInput_AndArrayRemovalWorks()
     {
@@ -164,8 +204,7 @@ public sealed class Ma2aGuiTests
         operation.Fields.Single(field => field.Name == "service").Text = "example";
         operation.Fields.Single(field => field.Name == "operation").Text = "echo";
 
-        var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
-        Assert.NotNull(operation.Build!(values));
+        Assert.NotNull(operation.Prepare().Body);
         body.Text += "00";
         Assert.Throws<InvalidOperationException>(() => body.BuildValue());
     }
@@ -187,10 +226,13 @@ public sealed class Ma2aGuiTests
         operation.Fields.Single(field => field.Name == "operation").Text = "pipe";
         operation.Fields.Single(field => field.Name == "version").Number = 2;
         operation.Fields.Single(field => field.Name == "input_hex").Text = hex;
-        var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
-
-        if (valid) Assert.NotNull(operation.Build!(values));
-        else Assert.Throws<ArgumentException>(() => operation.Build!(values));
+        if (valid)
+        {
+            var prepared = operation.Prepare();
+            Assert.NotNull(prepared.Body);
+            Assert.NotNull(Assert.IsType<Ma2aServiceOperations.StreamIntent>(prepared.Intent).SendInputAsync);
+        }
+        else Assert.Throws<ArgumentException>(() => operation.Prepare());
     }
 
     [Theory]
@@ -240,9 +282,25 @@ public sealed class Ma2aGuiTests
         length.Number = Ma2aServiceRequests.MaximumInlineFileBytes + 1;
         Assert.Throws<InvalidOperationException>(() => length.BuildValue());
         length.Number = 0;
-        var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
 
-        Assert.Equal(0U, operation.Build!(values)[3]!.GetValue<uint>());
+        Assert.Equal(0U, operation.Prepare().Body![3]!.GetValue<uint>());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProcessAttach_UsesTheRequestedStdinModeForBothTheWireAndTerminal(bool enableInput)
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == "process" && item.Name == "process attach");
+        operation.Fields.Single(field => field.Name == "process_id").Text = new string('1', 32);
+        operation.Fields.Single(field => field.Name == "stdin").Checked = enableInput;
+
+        var prepared = operation.Prepare();
+
+        var terminal = Assert.IsType<Ma2aServiceOperations.TerminalIntent>(prepared.Intent);
+        Assert.Equal(enableInput, terminal.AllowsInput);
+        Assert.Equal(enableInput, prepared.Body![3]!.GetValue<bool>());
+        Assert.False(terminal.SupportsResize);
     }
 
     [Theory]

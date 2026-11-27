@@ -93,10 +93,10 @@ public sealed class Ma2aToolSafetyTests : IDisposable
             ["arguments"] = new JsonObject { ["path"] = "data:/old", ["destination"] = "data:/new", ["replace"] = true },
         });
         var success = Assert.IsType<ToolExecutionResult.Success>(result);
-        var form = definition.BuildFormRequest(new Dictionary<string, JsonNode?>
+        var form = definition.PrepareForm(new Dictionary<string, JsonNode?>
         {
             ["from"] = "data:/old", ["to"] = "data:/new", ["replace"] = true,
-        });
+        }).Body;
 
         Assert.Equal("files", success.Value.GetProperty("service").GetString());
         Assert.True(JsonNode.DeepEquals(form, JsonNode.Parse(success.Value.GetProperty("body").GetRawText())));

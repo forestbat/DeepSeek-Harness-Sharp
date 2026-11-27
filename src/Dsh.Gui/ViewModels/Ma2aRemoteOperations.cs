@@ -1,17 +1,20 @@
-using System.Text.Json.Nodes;
 using Dsh.Ma2a.Services;
 
 namespace Dsh.Gui.ViewModels;
 
-public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyList<Ma2aFieldViewModel> Fields,
-    Func<IReadOnlyDictionary<string, JsonNode?>, JsonNode>? Build, bool IsMutation, bool IsTerminal)
+public sealed record Ma2aRemoteOperation(Ma2aServiceOperations.Operation Definition, IReadOnlyList<Ma2aFieldViewModel> Fields)
 {
+    public string Family => Definition.Family;
+    public string Name => Definition.Name;
     public string Label => $"{Family} / {Name}";
+    public bool IsMutation => Definition.IsMutation;
+
+    public Ma2aServiceOperations.PreparedForm Prepare()
+        => Definition.PrepareForm(Fields.ToDictionary(field => field.Name, field => field.BuildValue(), StringComparer.Ordinal));
 
     public static IReadOnlyList<Ma2aRemoteOperation> Create()
-        => Ma2aServiceOperations.All.Select(operation => new Ma2aRemoteOperation(operation.Family, operation.Name,
-            operation.FormFields.Select(CreateField).ToArray(), operation.HasRequestBody ? operation.BuildFormRequest : null,
-            operation.IsMutation, operation.IsTerminal)).ToArray();
+        => Ma2aServiceOperations.All.Select(operation =>
+            new Ma2aRemoteOperation(operation, operation.FormFields.Select(CreateField).ToArray())).ToArray();
 
     private static Ma2aFieldViewModel CreateField(Ma2aServiceOperations.FormField definition)
     {
@@ -20,9 +23,4 @@ public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyLi
             field.Number = value;
         return field;
     }
-
-    public static string S(IReadOnlyDictionary<string, JsonNode?> values, string name) => values[name]?.GetValue<string>() ?? "";
-    public static string? O(IReadOnlyDictionary<string, JsonNode?> values, string name) => values[name]?.GetValue<string>();
-    public static bool B(IReadOnlyDictionary<string, JsonNode?> values, string name) => values[name]?.GetValue<bool>() == true;
-    public static ulong U(IReadOnlyDictionary<string, JsonNode?> values, string name) => values[name]!.GetValue<ulong>();
 }

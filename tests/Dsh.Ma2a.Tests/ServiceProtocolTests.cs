@@ -19,15 +19,18 @@ public sealed class ServiceProtocolTests
     [Fact]
     public void SharedServiceOperationsKeepFileTransferFormsOutOfStreamPreparation()
     {
-        var operations = Ma2aServiceOperations.All;
-        var directTransfers = operations.Where(operation => !operation.HasRequestBody).ToArray();
+        var directTransfers = Ma2aServiceOperations.All.Where(operation => operation.ToolName is null).ToArray();
 
         Assert.Equal(new[] { "download", "upload" }, directTransfers.Select(operation => operation.Name));
         Assert.All(directTransfers, operation =>
         {
             Assert.Equal("transfer", operation.Family);
-            Assert.Null(operation.ToolName);
-            Assert.Contains(operation.FormFields, field => field.Name == "local_path");
+            var prepared = operation.PrepareForm(new Dictionary<string, JsonNode?>
+            {
+                ["path"] = "data:/example", ["local_path"] = "example.bin", ["replace"] = true,
+            });
+            Assert.Null(prepared.Body);
+            Assert.IsType<Ma2aServiceOperations.TransferIntent>(prepared.Intent);
         });
         Assert.False(directTransfers[0].IsMutation);
         Assert.True(directTransfers[1].IsMutation);
@@ -39,10 +42,10 @@ public sealed class ServiceProtocolTests
         const string id = "00000000000000000000000000000001";
         var definition = Ma2aServiceOperations.All.Single(operation => operation.ToolName == "process.logs");
         var cursor = definition.FormFields.Single(field => field.Name == "cursor");
-        var form = definition.BuildFormRequest(new Dictionary<string, JsonNode?>
+        var form = definition.PrepareForm(new Dictionary<string, JsonNode?>
         {
             ["process_id"] = id, ["cursor"] = cursor.InitialNumber,
-        });
+        }).Body;
         var tool = definition.BuildToolRequest(new JsonObject { ["id"] = id });
 
         Assert.True(JsonNode.DeepEquals(Ma2aServiceRequests.ProcessLogs(id, cursor: 0), form));

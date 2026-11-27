@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -10,6 +9,7 @@ using Dsh.Gui.Terminal;
 using Dsh.Ma2a;
 using Dsh.Ma2a.Services;
 using Dsh.Pty;
+using static Dsh.Ma2a.Services.Ma2aServiceOperations;
 
 namespace Dsh.Gui.ViewModels;
 
@@ -21,14 +21,13 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
     private Ma2aServiceSession? _activeSession;
     private Action? _terminalExitHandler;
     private long _generation;
-    private JsonNode? _pendingBody;
+    private PreparedForm _pendingForm;
     private Ma2aRemoteOperation? _pendingOperation;
-    private IReadOnlyDictionary<string, JsonNode?>? _pendingValues;
     private Ma2aClient? _pendingClient;
     private string? _pendingTarget;
     private UncertainRequest? _uncertain;
     private sealed record UncertainRequest(Ma2aClient Client, string Target, Ma2aRemoteOperation Operation,
-        IReadOnlyDictionary<string, JsonNode?> Values, JsonNode? Body, string RequestId, string OutputPath);
+        PreparedForm Form, string RequestId, string OutputPath);
     private const int MaximumResultEntries = 128;
 
     public IReadOnlyList<Ma2aRemoteOperation> Operations { get; } = Ma2aRemoteOperation.Create();
@@ -64,12 +63,10 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
         if (operation.IsMutation && !Confirmed) { Status = "请确认目标、操作和参数。"; return; }
         try
         {
-            var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
-            var body = operation.Build?.Invoke(values);
+            var form = operation.Prepare();
             _pendingClient = client();
             _pendingOperation = operation;
-            _pendingValues = values;
-            _pendingBody = body;
+            _pendingForm = form;
             _pendingTarget = TargetEndpoint;
             Ma2aServiceSession.DecodeIdentifier(TargetEndpoint, 32);
             RequestId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
@@ -85,8 +82,7 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
         _pendingClient = request.Client;
         _pendingTarget = request.Target;
         _pendingOperation = request.Operation;
-        _pendingValues = request.Values;
-        _pendingBody = request.Body;
+        _pendingForm = request.Form;
         RequestId = request.RequestId;
         RawOutputPath = request.OutputPath;
         await RunPreparedAsync(cancellationToken);
@@ -102,9 +98,13 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
         try
         {
             await CloseAttachmentsAsync();
-            if (await TransferAsync(_operation.Token)) return;
+            if (_pendingForm.Intent is TransferIntent transfer)
+            {
+                await TransferAsync(transfer, _operation.Token);
+                return;
+            }
             await OpenOperationAsync(_operation.Token);
-            if (_pendingOperation!.IsMutation && !_pendingOperation.IsTerminal) ClearUncertain();
+            if (_pendingOperation!.IsMutation && _pendingForm.Intent is not TerminalIntent) ClearUncertain();
         }
         catch (Ma2aServiceException error)
         {
@@ -119,26 +119,15 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
         finally { if (Terminal is null && _forward is null) Busy = false; Transferring = false; }
     }
 
-    private async Task<bool> TransferAsync(CancellationToken cancellationToken)
+    private async Task TransferAsync(TransferIntent transfer, CancellationToken cancellationToken)
     {
-        var operation = _pendingOperation!;
-        if (operation.Family != "transfer" && operation.Name != "artifact") return false;
         Transferring = true;
-        var values = _pendingValues!;
-        var localPath = Ma2aRemoteOperation.S(values, "local_path");
-        var replace = Ma2aRemoteOperation.B(values, "replace");
         var progress = new Progress<Ma2aTransferProgress>(value =>
         {
             Progress = value.Total == 0 ? 0 : (double)value.Completed / value.Total * 100;
             Status = $"传输 {value.Completed} / {value.Total} 字节";
         });
-        Ma2aTransferResult result;
-        if (operation.Name == "upload")
-            result = await Ma2aFileTransfer.UploadAsync(_pendingClient!, _pendingTarget!, Ma2aRemoteOperation.S(values, "path"), localPath, RequestId, replace, progress, cancellationToken);
-        else if (operation.Name == "artifact")
-            result = await Ma2aFileTransfer.DownloadArtifactAsync(_pendingClient!, _pendingTarget!, Ma2aRemoteOperation.S(values, "agent"), Ma2aRemoteOperation.S(values, "task_id"), Ma2aRemoteOperation.S(values, "name"), localPath, RequestId, replace, progress: progress, cancellationToken: cancellationToken);
-        else
-            result = await Ma2aFileTransfer.DownloadAsync(_pendingClient!, _pendingTarget!, Ma2aRemoteOperation.S(values, "path"), localPath, RequestId, replace, progress: progress, cancellationToken: cancellationToken);
+        var result = await transfer.ExecuteAsync(_pendingClient!, _pendingTarget!, RequestId, progress, cancellationToken);
         AddResult("verified transfer", new JsonObject
         {
             [nameof(result.Bytes)] = result.Bytes,
@@ -146,24 +135,23 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
             [nameof(result.Blake3)] = result.Blake3,
         });
         Status = $"传输完成，已验证 BLAKE3：{result.Blake3}";
-        if (operation.IsMutation) ClearUncertain();
-        return true;
+        if (_pendingOperation!.IsMutation) ClearUncertain();
     }
 
     private async Task OpenOperationAsync(CancellationToken cancellationToken)
     {
         var operation = _pendingOperation!;
-        if (operation.Family == "proxy")
+        if (_pendingForm.Intent is ProxyIntent proxy)
         {
-            _forward = new Ma2aProxyForward(_pendingClient!, _pendingTarget!, _pendingBody!, (ushort)Ma2aRemoteOperation.U(_pendingValues!, "local_port"), Report, cancellationToken);
+            _forward = new Ma2aProxyForward(_pendingClient!, _pendingTarget!, _pendingForm.Body!, proxy.LocalPort, Report, cancellationToken);
             Status = $"转发监听 127.0.0.1:{_forward.LocalPort}；每个连接单独接受 MA2A 授权。";
             return;
         }
-        var session = await Ma2aServiceSession.OpenAsync(_pendingClient!, _pendingTarget!, operation.Family, RequestId, _pendingBody!, cancellationToken);
-        if (operation.IsTerminal)
+        var session = await Ma2aServiceSession.OpenAsync(_pendingClient!, _pendingTarget!, operation.Family, RequestId, _pendingForm.Body!, cancellationToken);
+        if (_pendingForm.Intent is TerminalIntent terminal)
         {
             var generation = _generation;
-            _terminalConnection = new Ma2aTerminalConnection(session, operation.Family == "shell", operation.Name != "process attach" || Ma2aRemoteOperation.B(_pendingValues!, "stdin"), node => Dispatcher.UIThread.Post(() =>
+            _terminalConnection = new Ma2aTerminalConnection(session, terminal.SupportsResize, terminal.AllowsInput, node => Dispatcher.UIThread.Post(() =>
             {
                 if (generation == _generation) AddResult("terminal", node);
             }), error => OnTerminalFailure(error, generation), cancellationToken);
@@ -175,11 +163,11 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
             return;
         }
         _activeSession = session;
-        try { await using (session) await ReadOperationAsync(session, cancellationToken); }
+        try { await using (session) await ReadOperationAsync(session, _pendingForm.Intent as StreamIntent, cancellationToken); }
         finally { _activeSession = null; }
     }
 
-    private async Task ReadOperationAsync(Ma2aServiceSession session, CancellationToken cancellationToken)
+    private async Task ReadOperationAsync(Ma2aServiceSession session, StreamIntent? intent, CancellationToken cancellationToken)
     {
         await using var output = string.IsNullOrWhiteSpace(RawOutputPath) ? null
             : new FileStream(RawOutputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 65_536, FileOptions.Asynchronous);
@@ -198,11 +186,11 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
                 }
                 var frame = await reading;
                 reading = null;
-                if (frame.Kind == Ma2aFrameKind.Data) await ReceiveDataAsync(frame, output, exchanging.Token);
-                else if (frame.Kind == Ma2aFrameKind.Control && session.Service == "service") AddResult("Control bytes", Ma2aCbor.Bytes(frame.Payload.Span));
+                if (frame.Kind == Ma2aFrameKind.Data) await ReceiveDataAsync(frame, output, intent?.DecodeAgentEvents == true, exchanging.Token);
+                else if (frame.Kind == Ma2aFrameKind.Control && intent?.UsesServiceControlFrames == true) AddResult("Control bytes", Ma2aCbor.Bytes(frame.Payload.Span));
                 else if (frame.Kind is Ma2aFrameKind.Accept or Ma2aFrameKind.Control or Ma2aFrameKind.Outcome) AddResult(frame.Kind.ToString(), frame.DecodeCbor());
-                if (frame.Kind == Ma2aFrameKind.Accept && _pendingOperation!.Name is "process stdin" or "write") sending = SendInputAsync(session, exchanging.Token);
-                if (frame.Kind == Ma2aFrameKind.Accept && _pendingOperation!.Name == "call") sending = StartHostedInputAsync(session, exchanging.Token);
+                if (frame.Kind == Ma2aFrameKind.Accept && intent?.SendInputAsync is { } sendInput)
+                    sending = sendInput(session, exchanging.Token);
                 if (frame.Kind != Ma2aFrameKind.Outcome) continue;
                 Status = "远端操作已完成。";
                 return;
@@ -218,19 +206,10 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
         }
     }
 
-    private async Task SendInputAsync(Ma2aServiceSession session, CancellationToken cancellationToken)
-    {
-        var input = _pendingOperation!.Name == "write"
-            ? Convert.FromHexString(Ma2aRemoteOperation.S(_pendingValues!, "content_hex"))
-            : Encoding.UTF8.GetBytes(Ma2aRemoteOperation.S(_pendingValues!, "input"));
-        await session.SendDataAsync(0, input, cancellationToken);
-        await session.EndAsync(cancellationToken: cancellationToken);
-    }
-
-    private async Task ReceiveDataAsync(Ma2aServiceFrame frame, Stream? output, CancellationToken cancellationToken)
+    private async Task ReceiveDataAsync(Ma2aServiceFrame frame, Stream? output, bool decodeAgentEvents, CancellationToken cancellationToken)
     {
         if (output is not null) await output.WriteAsync(frame.Data, cancellationToken);
-        if (_pendingOperation?.Name == "watch")
+        if (decodeAgentEvents)
         {
             AddResult("Agent event", Ma2aCbor.Decode(frame.Data));
             return;
@@ -240,28 +219,6 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
             ["hex_preview"] = Convert.ToHexStringLower(frame.Data.Span[..Math.Min(frame.Data.Length, 128)]),
             ["saved"] = output is not null,
         });
-    }
-
-    private async Task StartHostedInputAsync(Ma2aServiceSession session, CancellationToken cancellationToken)
-    {
-        if (Ma2aRemoteOperation.O(_pendingValues!, "input_file") is { } path)
-            await SendHostedFileAsync(session, path, cancellationToken);
-        else
-        {
-            var bytes = Convert.FromHexString(Ma2aRemoteOperation.S(_pendingValues!, "input_hex"));
-            if (bytes.Length > 0) await session.SendDataAsync(0, bytes, cancellationToken);
-        }
-        if (!Ma2aRemoteOperation.B(_pendingValues!, "keep_input_open")) await session.EndAsync(cancellationToken: cancellationToken);
-    }
-
-    private static async Task SendHostedFileAsync(Ma2aServiceSession session, string path, CancellationToken cancellationToken)
-    {
-        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            Ma2aServiceSession.MaximumDataLength, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        var buffer = new byte[Ma2aServiceSession.MaximumDataLength];
-        int count;
-        while ((count = await input.ReadAsync(buffer, cancellationToken)) > 0)
-            await session.SendDataAsync(0, buffer.AsMemory(0, count), cancellationToken);
     }
 
     [RelayCommand]
@@ -279,7 +236,7 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
     {
         try
         {
-            if (_pendingOperation?.Family == "service" && _activeSession is not null)
+            if (_pendingForm.Intent is StreamIntent { UsesServiceControlFrames: true } && _activeSession is not null)
                 await _activeSession.ControlBytesAsync(Convert.FromHexString(ControlHex), cancellationToken);
         }
         catch (Exception error) { Status = error.Message; }
@@ -351,7 +308,7 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
     private void PreserveUncertain()
     {
         if (_pendingOperation?.IsMutation != true) return;
-        _uncertain = new(_pendingClient!, _pendingTarget!, _pendingOperation, _pendingValues!, _pendingBody, RequestId, RawOutputPath);
+        _uncertain = new(_pendingClient!, _pendingTarget!, _pendingOperation, _pendingForm, RequestId, RawOutputPath);
         PendingRequestId = RequestId;
         HasPending = true;
     }

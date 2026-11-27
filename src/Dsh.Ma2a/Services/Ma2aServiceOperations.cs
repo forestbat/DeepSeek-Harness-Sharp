@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using static Dsh.Ma2a.Services.Ma2aServiceRequests;
@@ -6,23 +7,45 @@ namespace Dsh.Ma2a.Services;
 
 public static class Ma2aServiceOperations
 {
+    private const string FileContentField = "content_hex";
+    private const string ProcessInputField = "input";
+    private const string StdinField = "stdin";
+    private const string HostedInputFileField = "input_file";
+    private const string HostedInputHexField = "input_hex";
+    private const string KeepHostedInputOpenField = "keep_input_open";
+    private const string LocalPathField = "local_path";
+    private const string LocalPortField = "local_port";
+    private const string ReplaceField = "replace";
+
     public sealed record FormField(string Name, JsonElement Schema, ulong? InitialNumber);
+    public readonly record struct PreparedForm(JsonArray? Body, FormIntent? Intent = null);
+
+    public abstract record FormIntent;
+    public sealed record TerminalIntent(bool SupportsResize, bool AllowsInput) : FormIntent;
+    public sealed record ProxyIntent(ushort LocalPort) : FormIntent;
+    public sealed record TransferIntent(
+        Func<Ma2aClient, string, string, IProgress<Ma2aTransferProgress>, CancellationToken, Task<Ma2aTransferResult>> ExecuteAsync) : FormIntent;
+    public sealed record StreamIntent(Func<Ma2aServiceSession, CancellationToken, Task>? SendInputAsync = null,
+        bool DecodeAgentEvents = false, bool UsesServiceControlFrames = false) : FormIntent;
 
     public sealed class Operation
     {
         private readonly Dictionary<string, Field> _fields;
-        private readonly Func<Arguments, JsonArray>? _build;
+        private readonly Func<Arguments, PreparedForm> _prepare;
 
         internal Operation(string family, string name, string? toolAction, IReadOnlyList<Field> fields,
-            Func<Arguments, JsonArray>? build, bool mutation = false, bool terminal = false)
+            Func<Arguments, JsonArray> build, bool mutation = false)
+            : this(family, name, toolAction, fields, a => new PreparedForm(build(a)), mutation) { }
+
+        internal Operation(string family, string name, string? toolAction, IReadOnlyList<Field> fields,
+            Func<Arguments, PreparedForm> prepare, bool mutation = false)
         {
             Family = family;
             Name = name;
             ToolName = toolAction is null ? null : $"{family}.{toolAction}";
             IsMutation = mutation;
-            IsTerminal = terminal;
             _fields = fields.ToDictionary(field => field.Name, StringComparer.Ordinal);
-            _build = build;
+            _prepare = prepare;
             FormFields = Array.AsReadOnly(fields.Select(field => field.Form).OfType<FormField>().ToArray());
         }
 
@@ -30,15 +53,14 @@ public static class Ma2aServiceOperations
         public string Name { get; }
         public string? ToolName { get; }
         public bool IsMutation { get; }
-        public bool IsTerminal { get; }
         public IReadOnlyList<FormField> FormFields { get; }
-        public bool HasRequestBody => _build is not null;
 
-        public JsonArray BuildFormRequest(IReadOnlyDictionary<string, JsonNode?> values)
-            => _build!(new Arguments(name => (_fields[name].Form is { } field ? values[field.Name] : null, name), IsForm: true));
+        public PreparedForm PrepareForm(IReadOnlyDictionary<string, JsonNode?> values)
+            => _prepare(new Arguments(name => (_fields[name].Form is { } field ? values[field.Name] : null, name), IsForm: true));
 
         public JsonArray BuildToolRequest(JsonObject values)
-            => _build!(new Arguments(name => _fields[name].ToolName is { } alias ? (values[alias], alias) : (null, name), IsForm: false));
+            => _prepare(new Arguments(name => _fields[name].ToolName is { } alias ? (values[alias], alias) : (null, name), IsForm: false)).Body
+                ?? throw new InvalidOperationException("This operation has no tool request body.");
     }
 
     internal sealed record Field(string Name, string? ToolName, FormField? Form);
@@ -71,34 +93,32 @@ public static class Ma2aServiceOperations
             [RemotePath("path"), Number("offset"), Number("length", maximum: MaximumInlineFileBytes, initial: MaximumInlineFileBytes)],
             a => Read(a.Text("path"), a.Number("offset"), checked((uint)a.Number("length", MaximumInlineFileBytes)))),
         new("files", "write", "write",
-            [RemotePath("path"), Text("content_hex", maximumBytes: MaximumInlineFileBytes * 2, formOnly: true), Flag("replace"), ToolField("length")],
-            a => Write(a.Text("path"), a.IsForm ? (uint)Convert.FromHexString(a.Text("content_hex")).Length : checked((uint)a.Number("length")),
-                a.Flag("replace")), mutation: true),
+            [RemotePath("path"), Text(FileContentField, maximumBytes: MaximumInlineFileBytes * 2, formOnly: true), Flag(ReplaceField), ToolField("length")],
+            PrepareFileWrite, mutation: true),
         new("files", "rename", "rename",
-            [RemotePath("from", toolName: "path"), RemotePath("to", toolName: "destination"), Flag("replace")],
-            a => Rename(a.Text("from"), a.Text("to"), a.Flag("replace")), mutation: true),
+            [RemotePath("from", toolName: "path"), RemotePath("to", toolName: "destination"), Flag(ReplaceField)],
+            a => Rename(a.Text("from"), a.Text("to"), a.Flag(ReplaceField)), mutation: true),
         new("files", "remove", "remove", [RemotePath("path"), Flag("recursive")],
             a => Remove(a.Text("path"), a.Flag("recursive")), mutation: true),
-        new("transfer", "download", null, [RemotePath("path"), LocalPath(), Flag("replace")], null),
-        new("transfer", "upload", null, [RemotePath("path"), LocalPath(), Flag("replace")], null, mutation: true),
-        new("exec", "exec", "run", [.. ProgramFields(), ToolField("stdin"), ToolField("timeout_ms")],
-            a => Exec(a.Text("program"), a.ProgramArguments(), a.OptionalText("cwd"), a.IsForm || a.Flag("stdin"),
-                a.Number("timeout_ms", DefaultExecTimeoutMilliseconds)), mutation: true, terminal: true),
+        new("transfer", "download", null, [RemotePath("path"), LocalPath(), Flag(ReplaceField)], a => PrepareFileTransfer(a, upload: false)),
+        new("transfer", "upload", null, [RemotePath("path"), LocalPath(), Flag(ReplaceField)], a => PrepareFileTransfer(a, upload: true), mutation: true),
+        new("exec", "exec", "run", [.. ProgramFields(), ToolField(StdinField), ToolField("timeout_ms")],
+            a => new PreparedForm(Exec(a.Text("program"), a.ProgramArguments(), a.OptionalText("cwd"), a.IsForm || a.Flag(StdinField),
+                a.Number("timeout_ms", DefaultExecTimeoutMilliseconds)), a.IsForm ? new TerminalIntent(SupportsResize: false, AllowsInput: true) : null), mutation: true),
         new("shell", "shell", "open",
             [.. ProgramFields(optionalProgram: true), ToolField("columns"), ToolField("rows"), ToolField("lifetime_ms")],
-            a => Shell(a.OptionalText("program"), a.ProgramArguments(), a.OptionalText("cwd"),
+            a => new PreparedForm(Shell(a.OptionalText("program"), a.ProgramArguments(), a.OptionalText("cwd"),
                 checked((ushort)a.Number("columns", DefaultShellColumns)), checked((ushort)a.Number("rows", DefaultShellRows)),
-                a.Number("lifetime_ms", MaximumLifetimeMilliseconds)), mutation: true, terminal: true),
-        new("process", "process start", "start", [.. ProgramFields(), Flag("stdin"), Text("name", true)],
-            a => ProcessStart(a.Text("program"), a.ProgramArguments(), a.OptionalText("cwd"), a.Flag("stdin"), a.OptionalText("name")), mutation: true),
+                a.Number("lifetime_ms", MaximumLifetimeMilliseconds)), a.IsForm ? new TerminalIntent(SupportsResize: true, AllowsInput: true) : null), mutation: true),
+        new("process", "process start", "start", [.. ProgramFields(), Flag(StdinField), Text("name", true)],
+            a => ProcessStart(a.Text("program"), a.ProgramArguments(), a.OptionalText("cwd"), a.Flag(StdinField), a.OptionalText("name")), mutation: true),
         new("process", "process list", "list", [Text("after", true)], a => Processes(a.OptionalText("after"))),
         new("process", "process inspect", "inspect", [ProcessId()], a => ProcessInspect(a.Text("process_id"))),
         new("process", "process logs", "logs", [ProcessId(), Number("cursor")],
             a => ProcessLogs(a.Text("process_id"), a.OptionalNumber("cursor"))),
-        new("process", "process attach", "attach", [ProcessId(), Flag("stdin"), ToolField("cursor")],
-            a => ProcessAttach(a.Text("process_id"), a.OptionalNumber("cursor"), a.Flag("stdin")), mutation: true, terminal: true),
-        new("process", "process stdin", "stdin", [ProcessId(), Text("input", maximumBytes: null, formOnly: true), Flag("close")],
-            a => ProcessStdin(a.Text("process_id"), a.Flag("close")), mutation: true),
+        new("process", "process attach", "attach", [ProcessId(), Flag(StdinField), ToolField("cursor")], PrepareProcessAttach, mutation: true),
+        new("process", "process stdin", "stdin", [ProcessId(), Text(ProcessInputField, maximumBytes: null, formOnly: true), Flag("close")],
+            PrepareProcessInput, mutation: true),
         new("process", "process signal", "signal", [ProcessId(), Number("signal", maximum: MaximumProcessSignal)],
             a => ProcessSignal(a.Text("process_id"), checked((byte)a.Number("signal"))), mutation: true),
         new("process", "process terminate", "terminate",
@@ -113,33 +133,121 @@ public static class Ma2aServiceOperations
         new("agent", "get", "get", [Text("agent"), TaskId()], a => AgentGet(a.Text("agent"), a.Text("task_id"))),
         new("agent", "tasks", "tasks", [Text("agent"), Text("after", true)], a => AgentTasks(a.Text("agent"), a.OptionalText("after"))),
         new("agent", "watch", "watch", [Text("agent"), TaskId(), Number("after", maximum: uint.MaxValue)],
-            a => AgentWatch(a.Text("agent"), a.Text("task_id"), checked((uint)a.Number("after")))),
+            a => new PreparedForm(AgentWatch(a.Text("agent"), a.Text("task_id"), checked((uint)a.Number("after"))),
+                a.IsForm ? new StreamIntent(DecodeAgentEvents: true) : null)),
         new("agent", "cancel", "cancel", [Text("agent"), TaskId()], a => AgentCancel(a.Text("agent"), a.Text("task_id")), mutation: true),
         new("agent", "artifact", "artifact",
-            [Text("agent"), TaskId(), Text("name"), LocalPath(), Flag("replace", formOnly: true), ToolField("offset"), ToolField("identity")],
-            a => AgentArtifact(a.Text("agent"), a.Text("task_id"), a.Text("name"), a.Number("offset"), a.Get("identity") as JsonArray)),
-        new("service", "describe", "describe", [Text("after", true)], a => Describe(a.OptionalText("after"))),
+            [Text("agent"), TaskId(), Text("name"), LocalPath(), Flag(ReplaceField, formOnly: true), ToolField("offset"), ToolField("identity")],
+            PrepareAgentArtifact),
+        new("service", "describe", "describe", [Text("after", true)],
+            a => new PreparedForm(Describe(a.OptionalText("after")), a.IsForm ? new StreamIntent(UsesServiceControlFrames: true) : null)),
         new("service", "call", "call",
             [Text("service", toolName: "name"), Number("version", 1, ushort.MaxValue), Text("operation"),
                 Text("body_hex", maximumBytes: MaximumHostedCallBodyBytes * 2, toolName: "hex"),
-                Text("input_hex", maximumBytes: null, formOnly: true), Text("input_file", true, maximumBytes: null, formOnly: true),
-                Flag("keep_input_open", formOnly: true)], BuildHostedCall, mutation: true),
+                Text(HostedInputHexField, maximumBytes: null, formOnly: true), Text(HostedInputFileField, true, maximumBytes: null, formOnly: true),
+                Flag(KeepHostedInputOpenField, formOnly: true)], PrepareHostedCall, mutation: true),
         new("proxy", "forward", "open",
-            [Text("host"), Number("port", 1, ushort.MaxValue), Number("local_port", maximum: ushort.MaxValue, formOnly: true), ToolField("idle_ms")],
-            a => Proxy(a.Text("host"), checked((ushort)a.Number("port")), a.Number("idle_ms", DefaultProxyIdleMilliseconds)), mutation: true),
+            [Text("host"), Number("port", 1, ushort.MaxValue), Number(LocalPortField, maximum: ushort.MaxValue, formOnly: true), ToolField("idle_ms")],
+            a => new PreparedForm(Proxy(a.Text("host"), checked((ushort)a.Number("port")), a.Number("idle_ms", DefaultProxyIdleMilliseconds)),
+                a.IsForm ? new ProxyIntent(checked((ushort)a.Number(LocalPortField))) : null), mutation: true),
     ]);
 
-    private static JsonArray BuildHostedCall(Arguments values)
+    private static PreparedForm PrepareFileWrite(Arguments values)
     {
-        if (values.IsForm && values.OptionalText("input_file") is { } path)
+        var path = values.Text("path");
+        var input = values.IsForm ? Convert.FromHexString(values.Text(FileContentField)) : null;
+        var length = input is null ? checked((uint)values.Number("length")) : (uint)input.Length;
+        return new(Write(path, length, values.Flag(ReplaceField)),
+            input is null ? null : new StreamIntent((session, signal) => SendAndEndAsync(session, input, signal)));
+    }
+
+    private static PreparedForm PrepareFileTransfer(Arguments values, bool upload)
+    {
+        var remote = values.Text("path");
+        var local = values.Text(LocalPathField);
+        var replace = values.Flag(ReplaceField);
+        return new(null, new TransferIntent((client, target, request, progress, signal) => upload
+            ? Ma2aFileTransfer.UploadAsync(client, target, remote, local, request, replace, progress, signal)
+            : Ma2aFileTransfer.DownloadAsync(client, target, remote, local, request, replace, progress: progress, cancellationToken: signal)));
+    }
+
+    private static PreparedForm PrepareAgentArtifact(Arguments values)
+    {
+        var agent = values.Text("agent");
+        var task = values.Text("task_id");
+        var name = values.Text("name");
+        var body = AgentArtifact(agent, task, name, values.Number("offset"), values.Get("identity") as JsonArray);
+        if (!values.IsForm)
+            return new(body);
+        var local = values.Text(LocalPathField);
+        var replace = values.Flag(ReplaceField);
+        return new(body, new TransferIntent((client, target, request, progress, signal) =>
+            Ma2aFileTransfer.DownloadArtifactAsync(client, target, agent, task, name, local, request, replace,
+                progress: progress, cancellationToken: signal)));
+    }
+
+    private static PreparedForm PrepareProcessAttach(Arguments values)
+    {
+        var id = values.Text("process_id");
+        var cursor = values.OptionalNumber("cursor");
+        var stdin = values.Flag(StdinField);
+        return new(ProcessAttach(id, cursor, stdin), values.IsForm ? new TerminalIntent(SupportsResize: false, AllowsInput: stdin) : null);
+    }
+
+    private static PreparedForm PrepareProcessInput(Arguments values)
+    {
+        var body = ProcessStdin(values.Text("process_id"), values.Flag("close"));
+        if (!values.IsForm)
+            return new(body);
+        var input = values.Text(ProcessInputField);
+        return new(body, new StreamIntent((session, signal) => SendAndEndAsync(session, Encoding.UTF8.GetBytes(input), signal)));
+    }
+
+    private static async Task SendAndEndAsync(Ma2aServiceSession session, ReadOnlyMemory<byte> input, CancellationToken signal)
+    {
+        await session.SendDataAsync(0, input, signal);
+        await session.EndAsync(cancellationToken: signal);
+    }
+
+    private static PreparedForm PrepareHostedCall(Arguments values)
+    {
+        StreamIntent? intent = null;
+        if (values.IsForm)
         {
-            if (string.IsNullOrWhiteSpace(path))
+            var path = values.OptionalText(HostedInputFileField);
+            var hex = values.Text(HostedInputHexField);
+            if (path is not null && string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Choose a local input file or leave input file null.");
-            if (values.Text("input_hex").Length != 0)
+            if (path is not null && hex.Length != 0)
                 throw new ArgumentException("Input file and input hex are mutually exclusive.");
+            var keepOpen = values.Flag(KeepHostedInputOpenField);
+            intent = new StreamIntent((session, signal) => SendHostedInputAsync(session, path, hex, keepOpen, signal),
+                UsesServiceControlFrames: true);
         }
-        return ServiceCall(values.Text("service"), checked((ushort)values.Number("version", 1)),
-            values.Text("operation"), Convert.FromHexString(values.Text("body_hex")));
+        return new(ServiceCall(values.Text("service"), checked((ushort)values.Number("version", 1)),
+            values.Text("operation"), Convert.FromHexString(values.Text("body_hex"))), intent);
+    }
+
+    private static async Task SendHostedInputAsync(Ma2aServiceSession session, string? path, string hex, bool keepOpen,
+        CancellationToken signal)
+    {
+        if (path is null)
+        {
+            var bytes = Convert.FromHexString(hex);
+            if (bytes.Length > 0)
+                await session.SendDataAsync(0, bytes, signal);
+        }
+        else
+        {
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                Ma2aServiceSession.MaximumDataLength, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var buffer = new byte[Ma2aServiceSession.MaximumDataLength];
+            int count;
+            while ((count = await input.ReadAsync(buffer, signal)) > 0)
+                await session.SendDataAsync(0, buffer.AsMemory(0, count), signal);
+        }
+        if (!keepOpen)
+            await session.EndAsync(cancellationToken: signal);
     }
 
     private static Field Text(string name, bool nullable = false, int? maximumBytes = 4096, string? toolName = null, bool formOnly = false)
@@ -153,7 +261,7 @@ public static class Ma2aServiceOperations
     private static Field RemotePath(string name, string? toolName = null)
         => Text(name, maximumBytes: MaximumRemotePathTextBytes, toolName: toolName);
 
-    private static Field LocalPath() => Text("local_path", maximumBytes: null, formOnly: true);
+    private static Field LocalPath() => Text(LocalPathField, maximumBytes: null, formOnly: true);
     private static Field ProcessId() => Text("process_id", toolName: "id");
     private static Field TaskId() => Text("task_id", toolName: "task");
     private static Field Message() => Text("message", maximumBytes: MaximumAgentMessageBytes, toolName: "text");

@@ -13,13 +13,13 @@ namespace Dsh.Gui.ViewModels;
 public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
 {
     private readonly CancellationTokenSource _lifetime = new();
+    private CancellationTokenSource _snapshotAttachment = new();
     private CancellationTokenSource? _observation;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly SemaphoreSlim _commandGate = new(1, 1);
     private JsonObject? _pendingCommand;
     private string? _pendingDirectory;
     private (ulong Revision, string? Boot)? _stamp;
-    private long _snapshotGeneration;
     private bool _observeConnection;
     private bool _observationActive = true;
     private bool _disposed;
@@ -55,7 +55,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     {
         StopObservation();
         _observeConnection = false;
-        _snapshotGeneration++;
+        ResetSnapshotAttachment();
         _stamp = null;
         Connected = false;
         Snapshot.Clear();
@@ -103,11 +103,13 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ConnectAsync(CancellationToken cancellationToken)
     {
+        if (_disposed) return;
         StopObservation();
         _observeConnection = false;
-        var generation = ++_snapshotGeneration;
+        ResetSnapshotAttachment();
+        var attachment = _snapshotAttachment;
         await RefreshAsync(cancellationToken);
-        if (generation != _snapshotGeneration || !Connected || _disposed) return;
+        if (attachment != _snapshotAttachment || !Connected || _disposed) return;
         _observeConnection = true;
         StartObservation();
     }
@@ -117,7 +119,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     {
         StopObservation();
         _observeConnection = false;
-        _snapshotGeneration++;
+        ResetSnapshotAttachment();
         Remote.Cancel();
         Connected = false;
         _stamp = null;
@@ -133,38 +135,38 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private async Task RefreshSnapshotAsync(bool includeTelemetry, CancellationToken cancellationToken)
     {
         if (_disposed) return;
-        var generation = _snapshotGeneration;
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        var attachment = _snapshotAttachment;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, attachment.Token);
         try
         {
             if (includeTelemetry) await _refreshGate.WaitAsync(linked.Token);
             else if (!await _refreshGate.WaitAsync(0, linked.Token)) return;
             try
             {
-                if (generation == _snapshotGeneration)
-                    await ReadSnapshotAsync(generation, includeTelemetry, linked.Token);
+                if (attachment == _snapshotAttachment)
+                    await ReadSnapshotAsync(attachment, includeTelemetry, linked.Token);
             }
             finally { _refreshGate.Release(); }
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
         catch (Exception error)
         {
-            if (generation == _snapshotGeneration && !_disposed) Invalidate(error);
+            if (attachment == _snapshotAttachment && !_disposed) Invalidate(error);
         }
     }
 
-    private async Task ReadSnapshotAsync(long generation, bool includeTelemetry, CancellationToken cancellationToken)
+    private async Task ReadSnapshotAsync(CancellationTokenSource attachment, bool includeTelemetry, CancellationToken cancellationToken)
     {
         var client = CreateClient();
         if (!includeTelemetry && Connected)
         {
             var response = await client.CallAsync(new JsonObject { ["operation"] = "snapshot_stamp" }, cancellationToken);
             var stamp = ReadStamp(response.GetProperty("result").GetProperty("payload"));
-            if (_stamp == stamp || generation != _snapshotGeneration || _disposed) return;
+            if (_stamp == stamp || attachment != _snapshotAttachment || _disposed) return;
         }
         var snapshot = await client.GetSnapshotAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        if (generation != _snapshotGeneration || _disposed) return;
+        if (attachment != _snapshotAttachment || _disposed) return;
         var payload = snapshot.GetProperty("result").GetProperty("payload");
         Endpoint = payload.GetProperty("endpoint").GetProperty("endpoint_id").GetString()!;
         UpdateSnapshot(Ma2aResultNode.ChildrenOf(payload));
@@ -336,12 +338,23 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
         _observation = null;
     }
 
+    private void ResetSnapshotAttachment()
+    {
+        if (_disposed) return;
+        var previous = _snapshotAttachment;
+        _snapshotAttachment = new CancellationTokenSource();
+        previous.Cancel();
+        previous.Dispose();
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         StopObservation();
         _lifetime.Cancel();
+        _snapshotAttachment.Cancel();
+        _snapshotAttachment.Dispose();
         Remote.Dispose();
         Connected = false;
         _lifetime.Dispose();
