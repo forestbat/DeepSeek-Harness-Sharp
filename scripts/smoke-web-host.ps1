@@ -77,6 +77,7 @@ function Start-SmokeProcess([string]$Name, [string[]]$Arguments, [string]$Execut
 }
 
 function Send-SmokeRequest([int]$Id, [string]$Method, $Parameters = $null) {
+    Write-Host "Published RPC request $Id : $Method"
     $request = @{ jsonrpc = $protocol.JsonRpc.Version; id = $Id; method = $Method }
     if ($null -ne $Parameters) { $request.params = $Parameters }
     $bytes = [Text.Encoding]::UTF8.GetBytes(($request | ConvertTo-Json -Depth 10 -Compress))
@@ -93,6 +94,7 @@ function Read-SmokeMessage {
             $message.Write($buffer, 0, $received.Count)
         } while (-not $received.EndOfMessage)
         $reply = [Text.Encoding]::UTF8.GetString($message.ToArray()) | ConvertFrom-Json
+        Write-Host "Published RPC received: id=$($reply.id) method=$($reply.method) state=$($reply.params.State)"
         if ($null -ne $reply.error) { throw "Published RPC failed: $($reply.error.message)" }
         return $reply
     } finally { $message.Dispose() }

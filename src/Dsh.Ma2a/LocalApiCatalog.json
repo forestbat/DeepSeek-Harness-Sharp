@@ -1,0 +1,1235 @@
+{
+  "schema": "ma2a.local-api",
+  "version": 1,
+  "commands": {
+    "handshake": {
+      "required": [],
+      "fields": {}
+    },
+    "status": {
+      "required": [],
+      "fields": {}
+    },
+    "endpoint_info": {
+      "required": [],
+      "fields": {}
+    },
+    "space_create": {
+      "required": [
+        "request_id",
+        "name"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "name": {
+          "ref": "space_name"
+        }
+      }
+    },
+    "space_list": {
+      "required": [],
+      "fields": {}
+    },
+    "space_show": {
+      "required": [
+        "space_id"
+      ],
+      "fields": {
+        "space_id": {
+          "ref": "space_id"
+        }
+      }
+    },
+    "space_invite": {
+      "required": [
+        "request_id",
+        "space_id",
+        "ttl_ms",
+        "output_path"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "space_id": {
+          "ref": "space_id"
+        },
+        "ttl_ms": {
+          "type": "integer",
+          "wire": "u64",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "output_path": {
+          "ref": "path"
+        }
+      }
+    },
+    "space_redeem": {
+      "required": [
+        "request_id",
+        "invitation"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "invitation": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 2048
+        }
+      }
+    },
+    "space_revoke": {
+      "required": [
+        "request_id",
+        "space_id",
+        "peer_endpoint_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "space_id": {
+          "ref": "space_id"
+        },
+        "peer_endpoint_id": {
+          "ref": "endpoint_id"
+        }
+      }
+    },
+    "space_leave": {
+      "required": [
+        "request_id",
+        "space_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "space_id": {
+          "ref": "space_id"
+        }
+      }
+    },
+    "control_sync_status": {
+      "required": [
+        "peer_endpoint_id"
+      ],
+      "fields": {
+        "peer_endpoint_id": {
+          "ref": "endpoint_id"
+        }
+      }
+    },
+    "control_sync_trigger": {
+      "required": [
+        "request_id",
+        "peer_endpoint_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "peer_endpoint_id": {
+          "ref": "endpoint_id"
+        }
+      }
+    },
+    "private_relay_configure": {
+      "required": [
+        "request_id",
+        "mode",
+        "listen",
+        "public_url",
+        "served_space_ids",
+        "certificate_path",
+        "private_key_path"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "mode": {
+          "ref": "relay_mode"
+        },
+        "listen": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 128
+        },
+        "public_url": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 512,
+          "format": "https_url_without_credentials"
+        },
+        "served_space_ids": {
+          "type": "array",
+          "max_items": 256,
+          "items": {
+            "ref": "space_id"
+          }
+        },
+        "certificate_path": {
+          "nullable": {
+            "ref": "path"
+          }
+        },
+        "private_key_path": {
+          "nullable": {
+            "ref": "path"
+          }
+        }
+      }
+    },
+    "private_relay_status": {
+      "required": [],
+      "fields": {}
+    },
+    "public_relay_configure": {
+      "required": [
+        "request_id",
+        "url"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "url": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 512,
+          "format": "https_url_without_credentials"
+        }
+      }
+    },
+    "public_relay_status": {
+      "required": [],
+      "fields": {}
+    },
+    "echo_call": {
+      "required": [
+        "request_id",
+        "target_endpoint_id",
+        "payload"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "target_endpoint_id": {
+          "ref": "endpoint_id"
+        },
+        "payload": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 4096
+        }
+      }
+    },
+    "ui_password_set": {
+      "required": [
+        "request_id",
+        "password"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "password": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 1024
+        }
+      }
+    },
+    "ui_password_reset": {
+      "required": [
+        "request_id",
+        "password"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "password": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 1024
+        }
+      }
+    },
+    "session_revoke_all": {
+      "required": [
+        "request_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        }
+      }
+    },
+    "snapshot_fetch": {
+      "required": [],
+      "fields": {}
+    },
+    "graceful_shutdown": {
+      "required": [
+        "request_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        }
+      }
+    },
+    "private_relay_disable": {
+      "required": [
+        "request_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        }
+      }
+    },
+    "public_relay_disable": {
+      "required": [
+        "request_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        }
+      }
+    },
+    "space_details_fetch": {
+      "required": [
+        "space_id"
+      ],
+      "fields": {
+        "space_id": {
+          "ref": "space_id"
+        }
+      }
+    },
+    "snapshot_stamp": {
+      "required": [],
+      "fields": {}
+    },
+    "ui_init": {
+      "required": [
+        "request_id",
+        "password"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "password": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 1024
+        }
+      }
+    },
+    "ui_start": {
+      "required": [
+        "host",
+        "port"
+      ],
+      "fields": {
+        "host": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 253,
+          "format": "ip_or_hostname"
+        },
+        "port": {
+          "type": "integer",
+          "wire": "u16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "ui_stop": {
+      "required": [],
+      "fields": {}
+    },
+    "ui_status": {
+      "required": [],
+      "fields": {}
+    },
+    "space_grant": {
+      "required": [
+        "request_id",
+        "space_id",
+        "peer_endpoint_id",
+        "files_read",
+        "files_write",
+        "exec",
+        "shell",
+        "proxy",
+        "process",
+        "agent",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "space_id": {
+          "ref": "space_id"
+        },
+        "peer_endpoint_id": {
+          "ref": "endpoint_id"
+        },
+        "files_read": {
+          "ref": "boolean"
+        },
+        "files_write": {
+          "ref": "boolean"
+        },
+        "exec": {
+          "ref": "boolean"
+        },
+        "shell": {
+          "ref": "boolean"
+        },
+        "proxy": {
+          "ref": "boolean"
+        },
+        "process": {
+          "ref": "boolean"
+        },
+        "agent": {
+          "ref": "boolean"
+        },
+        "service": {
+          "ref": "boolean"
+        }
+      }
+    },
+    "service_expose": {
+      "required": [
+        "request_id",
+        "space_id",
+        "kind",
+        "root",
+        "path",
+        "access",
+        "host",
+        "port_start",
+        "port_end",
+        "agent",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "space_id": {
+          "ref": "space_id"
+        },
+        "kind": {
+          "type": "enum",
+          "values": [
+            "files_root",
+            "exec",
+            "shell",
+            "proxy",
+            "process",
+            "agent",
+            "service"
+          ]
+        },
+        "root": {
+          "nullable": {
+            "type": "string",
+            "min_bytes": 1,
+            "max_bytes": 64
+          }
+        },
+        "path": {
+          "nullable": {
+            "ref": "path"
+          }
+        },
+        "access": {
+          "nullable": {
+            "type": "enum",
+            "values": [
+              "read_only",
+              "read_write"
+            ]
+          }
+        },
+        "host": {
+          "nullable": {
+            "type": "string",
+            "min_bytes": 1,
+            "max_bytes": 253
+          }
+        },
+        "port_start": {
+          "nullable": {
+            "type": "integer",
+            "wire": "u16",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "port_end": {
+          "nullable": {
+            "type": "integer",
+            "wire": "u16",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "agent": {
+          "nullable": {
+            "ref": "agent_name"
+          }
+        },
+        "service": {
+          "nullable": {
+            "ref": "service_name"
+          }
+        }
+      }
+    },
+    "service_unexpose": {
+      "required": [
+        "request_id",
+        "space_id",
+        "kind",
+        "root",
+        "host",
+        "port_start",
+        "port_end",
+        "agent",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "space_id": {
+          "ref": "space_id"
+        },
+        "kind": {
+          "type": "enum",
+          "values": [
+            "files_root",
+            "exec",
+            "shell",
+            "proxy",
+            "process",
+            "agent",
+            "service"
+          ]
+        },
+        "root": {
+          "nullable": {
+            "type": "string",
+            "min_bytes": 1,
+            "max_bytes": 64
+          }
+        },
+        "host": {
+          "nullable": {
+            "type": "string",
+            "min_bytes": 1,
+            "max_bytes": 253
+          }
+        },
+        "port_start": {
+          "nullable": {
+            "type": "integer",
+            "wire": "u16",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "port_end": {
+          "nullable": {
+            "type": "integer",
+            "wire": "u16",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "agent": {
+          "nullable": {
+            "ref": "agent_name"
+          }
+        },
+        "service": {
+          "nullable": {
+            "ref": "service_name"
+          }
+        }
+      }
+    },
+    "service_exposure_list": {
+      "required": [],
+      "fields": {}
+    },
+    "operations_status": {
+      "required": [],
+      "fields": {}
+    },
+    "stream_open": {
+      "required": [
+        "request_id",
+        "target_endpoint_id",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "target_endpoint_id": {
+          "ref": "endpoint_id"
+        },
+        "service": {
+          "type": "enum",
+          "values": [
+            "files",
+            "transfer",
+            "exec",
+            "shell",
+            "proxy",
+            "process",
+            "agent",
+            "service"
+          ]
+        }
+      }
+    },
+    "process_list": {
+      "required": [
+        "after"
+      ],
+      "fields": {
+        "after": {
+          "nullable": {
+            "ref": "process_id"
+          }
+        }
+      }
+    },
+    "process_inspect": {
+      "required": [
+        "process_id"
+      ],
+      "fields": {
+        "process_id": {
+          "ref": "process_id"
+        }
+      }
+    },
+    "process_terminate": {
+      "required": [
+        "request_id",
+        "process_id",
+        "grace_ms"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "process_id": {
+          "ref": "process_id"
+        },
+        "grace_ms": {
+          "type": "integer",
+          "wire": "u32",
+          "minimum": 0,
+          "maximum": 60000
+        }
+      }
+    },
+    "process_delete": {
+      "required": [
+        "request_id",
+        "process_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "process_id": {
+          "ref": "process_id"
+        }
+      }
+    },
+    "agent_define": {
+      "required": [
+        "request_id",
+        "agent",
+        "description",
+        "program",
+        "args",
+        "cwd",
+        "env",
+        "tools",
+        "max_tasks"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "agent": {
+          "ref": "agent_name"
+        },
+        "description": {
+          "type": "string",
+          "max_bytes": 256
+        },
+        "program": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 4096
+        },
+        "args": {
+          "type": "array",
+          "max_items": 256,
+          "items": {
+            "type": "string",
+            "max_bytes": 4096
+          }
+        },
+        "cwd": {
+          "nullable": {
+            "type": "string",
+            "min_bytes": 1,
+            "max_bytes": 4096,
+            "format": "absolute_path"
+          }
+        },
+        "env": {
+          "type": "array",
+          "max_items": 64,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "value"
+            ],
+            "fields": {
+              "name": {
+                "type": "string",
+                "min_bytes": 1,
+                "max_bytes": 128
+              },
+              "value": {
+                "type": "string",
+                "max_bytes": 4096
+              }
+            }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "max_items": 6,
+          "items": {
+            "ref": "agent_tool_family"
+          }
+        },
+        "max_tasks": {
+          "type": "integer",
+          "wire": "u8",
+          "minimum": 1,
+          "maximum": 16
+        }
+      }
+    },
+    "agent_undefine": {
+      "required": [
+        "request_id",
+        "agent"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "agent": {
+          "ref": "agent_name"
+        }
+      }
+    },
+    "agent_start": {
+      "required": [
+        "request_id",
+        "agent"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "agent": {
+          "ref": "agent_name"
+        }
+      }
+    },
+    "agent_stop": {
+      "required": [
+        "request_id",
+        "agent"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "agent": {
+          "ref": "agent_name"
+        }
+      }
+    },
+    "agent_list": {
+      "required": [
+        "after"
+      ],
+      "fields": {
+        "after": {
+          "nullable": {
+            "ref": "agent_name"
+          }
+        }
+      }
+    },
+    "agent_task_list": {
+      "required": [
+        "agent",
+        "after"
+      ],
+      "fields": {
+        "agent": {
+          "nullable": {
+            "ref": "agent_name"
+          }
+        },
+        "after": {
+          "nullable": {
+            "ref": "agent_task_id"
+          }
+        }
+      }
+    },
+    "agent_task_inspect": {
+      "required": [
+        "task_id"
+      ],
+      "fields": {
+        "task_id": {
+          "ref": "agent_task_id"
+        }
+      }
+    },
+    "agent_task_events": {
+      "required": [
+        "task_id",
+        "after"
+      ],
+      "fields": {
+        "task_id": {
+          "ref": "agent_task_id"
+        },
+        "after": {
+          "ref": "u32"
+        }
+      }
+    },
+    "agent_task_artifact_read": {
+      "required": [
+        "task_id",
+        "name",
+        "offset"
+      ],
+      "fields": {
+        "task_id": {
+          "ref": "agent_task_id"
+        },
+        "name": {
+          "type": "string",
+          "min_bytes": 1,
+          "max_bytes": 128
+        },
+        "offset": {
+          "type": "integer",
+          "wire": "u64",
+          "minimum": 0
+        }
+      }
+    },
+    "agent_task_submit": {
+      "required": [
+        "request_id",
+        "agent",
+        "message"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "agent": {
+          "ref": "agent_name"
+        },
+        "message": {
+          "ref": "agent_message"
+        }
+      }
+    },
+    "agent_task_send": {
+      "required": [
+        "request_id",
+        "task_id",
+        "message"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "task_id": {
+          "ref": "agent_task_id"
+        },
+        "message": {
+          "ref": "agent_message"
+        }
+      }
+    },
+    "agent_task_cancel": {
+      "required": [
+        "request_id",
+        "task_id"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "task_id": {
+          "ref": "agent_task_id"
+        }
+      }
+    },
+    "service_register": {
+      "required": [
+        "request_id",
+        "service",
+        "manifest"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "service": {
+          "ref": "service_name"
+        },
+        "manifest": {
+          "ref": "service_manifest"
+        }
+      }
+    },
+    "service_unregister": {
+      "required": [
+        "request_id",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "service": {
+          "ref": "service_name"
+        }
+      }
+    },
+    "service_start": {
+      "required": [
+        "request_id",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "service": {
+          "ref": "service_name"
+        }
+      }
+    },
+    "service_stop": {
+      "required": [
+        "request_id",
+        "service"
+      ],
+      "fields": {
+        "request_id": {
+          "ref": "request_id"
+        },
+        "service": {
+          "ref": "service_name"
+        }
+      }
+    },
+    "service_hosted_list": {
+      "required": [
+        "after"
+      ],
+      "fields": {
+        "after": {
+          "nullable": {
+            "ref": "service_name"
+          }
+        }
+      }
+    },
+    "service_attach": {
+      "required": [
+        "service"
+      ],
+      "fields": {
+        "service": {
+          "ref": "service_name"
+        }
+      }
+    },
+    "service_accept": {
+      "required": [
+        "service",
+        "call_id"
+      ],
+      "fields": {
+        "service": {
+          "ref": "service_name"
+        },
+        "call_id": {
+          "type": "string",
+          "format": "lowercase_hex",
+          "bytes": 16
+        }
+      }
+    }
+  },
+  "request_id_policy": {
+    "same_payload": "replay",
+    "different_payload": "conflict",
+    "persistence": "durable_terminal_outcomes_and_permanent_fences"
+  },
+  "bounds": {
+    "request_bytes": 16384,
+    "response_bytes": 65536,
+    "event_bytes": 16384,
+    "text_bytes": 4096,
+    "collection_items": 256
+  },
+  "source_schema_sha256": "d9d0b863136863b12ea9dc44c61721363f3fb4606cadef89495430b08eef2612",
+  "types": {
+    "agent_message": {
+      "type": "object",
+      "required": [
+        "role",
+        "parts"
+      ],
+      "fields": {
+        "role": {
+          "type": "enum",
+          "values": [
+            "user",
+            "agent"
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "min_items": 1,
+          "max_items": 16,
+          "items": {
+            "ref": "agent_message_part"
+          }
+        }
+      }
+    },
+    "agent_message_part": {
+      "type": "object",
+      "required": [
+        "kind",
+        "content"
+      ],
+      "fields": {
+        "kind": {
+          "type": "enum",
+          "values": [
+            "text",
+            "data"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "max_bytes": 12288
+        }
+      }
+    },
+    "agent_name": {
+      "type": "string",
+      "min_bytes": 1,
+      "max_bytes": 63,
+      "format": "agent_name"
+    },
+    "agent_task_id": {
+      "type": "string",
+      "format": "lowercase_hex",
+      "bytes": 16
+    },
+    "agent_tool_family": {
+      "type": "enum",
+      "values": [
+        "files",
+        "transfer",
+        "exec",
+        "process",
+        "proxy",
+        "agent"
+      ]
+    },
+    "boolean": {
+      "type": "boolean"
+    },
+    "endpoint_id": {
+      "type": "string",
+      "format": "lowercase_hex",
+      "bytes": 32
+    },
+    "operation_name": {
+      "type": "string",
+      "min_bytes": 1,
+      "max_bytes": 32,
+      "format": "operation_name"
+    },
+    "path": {
+      "type": "string",
+      "min_bytes": 1,
+      "max_bytes": 4096
+    },
+    "process_id": {
+      "type": "string",
+      "format": "lowercase_hex",
+      "bytes": 16
+    },
+    "relay_mode": {
+      "type": "enum",
+      "values": [
+        "native_tls",
+        "external_termination"
+      ]
+    },
+    "request_id": {
+      "type": "string",
+      "format": "lowercase_hex",
+      "bytes": 16
+    },
+    "service_interaction": {
+      "type": "enum",
+      "values": [
+        "unary",
+        "stream",
+        "bytes",
+        "resource"
+      ]
+    },
+    "service_manifest": {
+      "type": "object",
+      "required": [
+        "description",
+        "max_calls",
+        "versions"
+      ],
+      "fields": {
+        "description": {
+          "type": "string",
+          "max_bytes": 256
+        },
+        "max_calls": {
+          "type": "integer",
+          "wire": "u8",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "versions": {
+          "type": "array",
+          "min_items": 1,
+          "max_items": 8,
+          "items": {
+            "ref": "service_version"
+          }
+        }
+      }
+    },
+    "service_name": {
+      "type": "string",
+      "min_bytes": 1,
+      "max_bytes": 63,
+      "format": "service_name"
+    },
+    "service_operation": {
+      "type": "object",
+      "required": [
+        "name",
+        "interaction"
+      ],
+      "fields": {
+        "name": {
+          "ref": "operation_name"
+        },
+        "interaction": {
+          "ref": "service_interaction"
+        }
+      }
+    },
+    "service_version": {
+      "type": "object",
+      "required": [
+        "version",
+        "operations"
+      ],
+      "fields": {
+        "version": {
+          "type": "integer",
+          "wire": "u16",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "operations": {
+          "type": "array",
+          "min_items": 1,
+          "max_items": 16,
+          "items": {
+            "ref": "service_operation"
+          }
+        }
+      }
+    },
+    "space_id": {
+      "type": "string",
+      "format": "lowercase_hex",
+      "bytes": 32
+    },
+    "space_name": {
+      "type": "string",
+      "min_bytes": 1,
+      "max_bytes": 128
+    },
+    "u32": {
+      "type": "integer",
+      "wire": "u32",
+      "minimum": 0,
+      "maximum": 4294967295
+    }
+  }
+}

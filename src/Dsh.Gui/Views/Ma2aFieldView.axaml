@@ -1,0 +1,47 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Dsh.Gui.ViewModels"
+             xmlns:views="using:Dsh.Gui.Views"
+             x:Class="Dsh.Gui.Views.Ma2aFieldView"
+             x:DataType="vm:Ma2aFieldViewModel"
+             x:CompileBindings="True">
+  <StackPanel Spacing="6" Margin="0,0,0,8">
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <TextBlock Text="{Binding Label}" FontWeight="SemiBold" VerticalAlignment="Center" />
+      <CheckBox Content="空值" IsVisible="{Binding IsNullable}" IsChecked="{Binding IsNull, Mode=TwoWay}" />
+    </StackPanel>
+    <TextBlock Text="{Binding Hint}" TextWrapping="Wrap" Classes="Tertiary" />
+    <StackPanel Spacing="6" IsEnabled="{Binding !IsNull}">
+      <TextBox IsVisible="{Binding IsString}" Text="{Binding Text, Mode=TwoWay}" PasswordChar="{Binding PasswordCharacter}"
+               AutomationProperties.Name="{Binding Label}" />
+      <ComboBox IsVisible="{Binding IsEnum}" ItemsSource="{Binding Choices}" SelectedItem="{Binding Text, Mode=TwoWay}"
+                HorizontalAlignment="Stretch" AutomationProperties.Name="{Binding Label}" />
+      <CheckBox IsVisible="{Binding IsBoolean}" Content="允许 / 启用" IsChecked="{Binding Checked, Mode=TwoWay}"
+                AutomationProperties.Name="{Binding Label}" />
+      <NumericUpDown IsVisible="{Binding IsNumber}" Value="{Binding Number, Mode=TwoWay}" Minimum="{Binding Minimum}"
+                     Maximum="{Binding Maximum}" Increment="1" FormatString="0" AutomationProperties.Name="{Binding Label}" />
+      <ItemsControl IsVisible="{Binding IsObject}" ItemsSource="{Binding Children}" Margin="12,0,0,0">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:Ma2aFieldViewModel"><views:Ma2aFieldView /></DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <StackPanel IsVisible="{Binding IsArray}" Spacing="6">
+        <ItemsControl ItemsSource="{Binding Items}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:Ma2aFieldViewModel">
+              <Border BorderThickness="1" BorderBrush="{DynamicResource Brush.Border.Subtle}" Padding="8" Margin="0,0,0,6">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Content="移除" VerticalAlignment="Top"
+                          Command="{Binding $parent[ItemsControl].((vm:Ma2aFieldViewModel)DataContext).RemoveItemCommand}"
+                          CommandParameter="{Binding}" />
+                  <views:Ma2aFieldView />
+                </DockPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <Button Content="添加项目" Command="{Binding AddItemCommand}" HorizontalAlignment="Left" />
+      </StackPanel>
+    </StackPanel>
+  </StackPanel>
+</UserControl>

@@ -1,0 +1,82 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Dsh.Gui.ViewModels"
+             xmlns:views="using:Dsh.Gui.Views"
+             x:Class="Dsh.Gui.Views.Ma2aView"
+             x:DataType="vm:Ma2aViewModel"
+             x:CompileBindings="True">
+  <UserControl.DataTemplates>
+    <TreeDataTemplate DataType="vm:Ma2aResultNode" x:DataType="vm:Ma2aResultNode" ItemsSource="{Binding Children}">
+      <SelectableTextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+    </TreeDataTemplate>
+  </UserControl.DataTemplates>
+  <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="8" Margin="16">
+    <TextBlock Text="MA2A" Classes="Title" />
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+      <TextBlock Text="状态目录" VerticalAlignment="Center" />
+      <TextBox Grid.Column="1" Text="{Binding StateDirectory, Mode=TwoWay}" AutomationProperties.Name="MA2A 状态目录" />
+      <Button Grid.Column="2" Content="连接" Command="{Binding ConnectCommand}" />
+      <Button Grid.Column="3" Content="刷新" Command="{Binding RefreshCommand}" />
+      <Button Grid.Column="4" Content="断开" Command="{Binding DisconnectCommand}" />
+    </Grid>
+    <StackPanel Grid.Row="2" Spacing="4">
+      <SelectableTextBlock Text="{Binding Endpoint}" Classes="Mono Secondary" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+    </StackPanel>
+    <TabControl Grid.Row="3">
+      <TabItem Header="Runtime / 节点 / Spaces">
+        <Grid RowDefinitions="Auto,*" RowSpacing="12" Margin="0,12,0,0">
+          <Expander Header="Runtime 生命周期（显式操作）">
+            <StackPanel Spacing="8">
+              <TextBlock Text="离开页面会暂停后台刷新。停止或重启 Runtime 会影响正在进行的工作。" TextWrapping="Wrap" />
+              <TextBlock Text="MA2A 可执行程序" Classes="Secondary" />
+              <TextBox Text="{Binding Executable, Mode=TwoWay}" AutomationProperties.Name="MA2A 可执行程序" />
+              <CheckBox Content="我确认改变所选 Runtime 的生命周期" IsChecked="{Binding LifecycleConfirmed, Mode=TwoWay}" />
+              <WrapPanel ItemSpacing="8" LineSpacing="8">
+                <Button Content="启动" Command="{Binding LifecycleCommand}" CommandParameter="start" />
+                <Button Content="停止" Command="{Binding LifecycleCommand}" CommandParameter="stop" />
+                <Button Content="重启" Command="{Binding LifecycleCommand}" CommandParameter="restart" />
+              </WrapPanel>
+            </StackPanel>
+          </Expander>
+          <TreeView Grid.Row="1" ItemsSource="{Binding Snapshot}" />
+        </Grid>
+      </TabItem>
+      <TabItem Header="原生管理">
+        <Grid ColumnDefinitions="*,6,*" Margin="0,12,0,0">
+          <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" RowSpacing="8">
+            <ComboBox ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                      AutomationProperties.Name="MA2A 管理分区" />
+            <ComboBox Grid.Row="1" ItemsSource="{Binding Commands}" SelectedItem="{Binding SelectedCommand, Mode=TwoWay}"
+                      HorizontalAlignment="Stretch" AutomationProperties.Name="MA2A 原生操作">
+              <ComboBox.ItemTemplate><DataTemplate x:DataType="vm:Ma2aCommandDefinition"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Grid.Row="2" Text="{Binding OperationHint}" TextWrapping="Wrap" Classes="Secondary" />
+            <ScrollViewer Grid.Row="3">
+              <ItemsControl ItemsSource="{Binding Fields}" Margin="0,0,8,0">
+                <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:Ma2aFieldViewModel"><views:Ma2aFieldView /></DataTemplate></ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+            <CheckBox Grid.Row="4" Content="我已核实目标、参数和操作影响" IsChecked="{Binding Confirmed, Mode=TwoWay}" />
+            <StackPanel Grid.Row="5" Spacing="8">
+              <WrapPanel ItemSpacing="8" LineSpacing="8">
+                <Button Content="执行操作" Command="{Binding ExecuteCommand}" IsEnabled="{Binding CanExecuteSelected}" />
+                <Button Content="重试相同请求" Command="{Binding RetryCommand}" IsVisible="{Binding HasPending}" />
+                <Button Content="已核实上次结果" Command="{Binding AcknowledgePendingCommand}" IsVisible="{Binding HasPending}" />
+              </WrapPanel>
+              <SelectableTextBlock Text="{Binding RequestId, StringFormat='RequestId: {0}'}" Classes="Tertiary Mono" />
+            </StackPanel>
+          </Grid>
+          <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+          <Grid Grid.Column="2" RowDefinitions="Auto,*" Margin="8,0,0,0" RowSpacing="8">
+            <TextBlock Text="Runtime 响应" FontWeight="SemiBold" />
+            <TreeView Grid.Row="1" ItemsSource="{Binding Result}" />
+          </Grid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="远端文件 / 终端 / 服务">
+        <views:Ma2aRemoteView DataContext="{Binding Remote}" />
+      </TabItem>
+    </TabControl>
+  </Grid>
+</UserControl>

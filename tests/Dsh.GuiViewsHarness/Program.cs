@@ -26,12 +26,12 @@ internal static class Program
     private const int WindowWidth = 1400;
     private const int WindowHeight = 900;
     private const string BackgroundKey = "Brush.Bg.Window";
-    private const string Usage = "usage: dsh-gui-views files|git|machines [project path]";
+    private const string Usage = "usage: dsh-gui-views files|git|machines|ma2a [project path or Runtime state directory]";
 
     [STAThread]
     public static int Main(string[] args)
     {
-        if (args is not [var view, ..] || view is not ("files" or "git" or "machines"))
+        if (args is not [var view, ..] || view is not ("files" or "git" or "machines" or "ma2a"))
         {
             Console.Error.WriteLine(Usage);
             return 2;
@@ -49,6 +49,15 @@ internal static class Program
 
     private static async Task ShowAsync(Window window, string view, string project)
     {
+        if (view == "ma2a")
+        {
+            var runtime = new Ma2aViewModel { StateDirectory = project };
+            window.Closed += (_, _) => runtime.Dispose();
+            window.Content = new Ma2aView { DataContext = runtime };
+            await runtime.ConnectCommand.ExecuteAsync(null);
+            await Console.Out.WriteLineAsync(runtime.Connected ? "Runtime view connected." : "Runtime view connection failed.");
+            return;
+        }
         var home = HarnessHome.Default();
         var options = new FleetOptions { ClientName = $"gui-views@{Environment.MachineName}", AutoReconnect = false };
         if (view == "machines")

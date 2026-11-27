@@ -647,6 +647,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         {
             var environment = await GuiTestEnvironment.CreateIsolatedAsync();
             await using var environmentScope = environment;
+            environment.CancelBeforeModelRequest();
             var cwd = environment.Agent.Session.Header.Cwd ?? throw new InvalidOperationException("session has no cwd");
             await File.WriteAllTextAsync(Path.Combine(cwd, "notes.md"), "见附图说明", TestContext.Current.CancellationToken);
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
@@ -668,8 +669,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Assert.Equal(viewModel.Composer.Input.Length, inputBox.CaretIndex);
             Assert.False(viewModel.IsSuggestionOpen);
 
+            const string prompt = "@notes.md 请修改这个文件";
             window.KeyTextInput("请修改这个文件");
-            Assert.Equal("@notes.md 请修改这个文件", viewModel.Composer.Input);
+            Assert.Equal(prompt, viewModel.Composer.Input);
             Assert.False(viewModel.IsSuggestionOpen);
             window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
             if (viewModel.SubmitCommand.ExecutionTask is { } submission)
@@ -677,10 +679,11 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Assert.Equal("", viewModel.Composer.Input);
             // 文件引用按原样留在提示词里(正文由模型自己 read), 菜单选中后继续输入的提示词必须一起提交。
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
-                () => viewModel.Messages.Any(message => message.Kind == MessageKind.User
-                    && message.Text.Contains("@notes.md", StringComparison.Ordinal)
-                    && message.Text.Contains("请修改这个文件", StringComparison.Ordinal)),
+                () => viewModel.Messages.Any(message => message.Kind == MessageKind.User && message.Text == prompt),
                 () => GuiTestEnvironment.DescribeChatState(viewModel));
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+            Assert.Contains(environment.Agent.Session.SnapshotEvents(),
+                item => item.Data is TurnEndPayload { Reason: TurnEndReason.Aborted { Reason: AgentCancelCause.User } });
 
             window.Close();
             Dispatcher.UIThread.RunJobs();

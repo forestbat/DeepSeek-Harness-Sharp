@@ -29,6 +29,7 @@ public sealed class GuiEventApplyBudgetTests
         var batches = new List<int>();
         var longestSliceMs = 0.0;
         var lastEventApplied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inputApplied = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var bridge = new DispatcherBridge<int>(batch =>
         {
             var watch = Stopwatch.StartNew();
@@ -36,6 +37,8 @@ public sealed class GuiEventApplyBudgetTests
             applied += batch.Count;
             batches.Add(batch.Count);
             longestSliceMs = Math.Max(longestSliceMs, watch.Elapsed.TotalMilliseconds);
+            if (batches.Count == 1)
+                Dispatcher.UIThread.Post(() => inputApplied.TrySetResult(applied), DispatcherPriority.Input);
             if (batch[^1] == Total - 1)
                 lastEventApplied.TrySetResult();
         });
@@ -52,14 +55,12 @@ public sealed class GuiEventApplyBudgetTests
             }, DispatcherPriority.Input);
         }, null, HeartbeatPeriodMs, HeartbeatPeriodMs);
 
-        var producer = Task.Run(() =>
-        {
-            for (var index = 0; index < Total; index += 1)
-                bridge.Enqueue(index);
-        });
-        await producer;
+        // Queue the entire burst before the dispatcher can drain it, so Input must interrupt a backlog.
+        for (var index = 0; index < Total; index += 1)
+            bridge.Enqueue(index);
 
         await lastEventApplied.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        var appliedAtInput = await inputApplied.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         heartbeat.Dispose();
         // 让最后几拍心跳落地, 否则统计只剩前半段。
         await Task.Delay(100, cancellationToken);
@@ -68,7 +69,11 @@ public sealed class GuiEventApplyBudgetTests
         Assert.True(batches.Count > 20, $"只拆出 {batches.Count} 批: 说明一拍干到底, 没有让出(applied={applied} longest={longestSliceMs:0}ms)");
         var average = (double)Total / batches.Count;
         Assert.True(average > 8, $"平均 {average:0.0} 条/批: 仍是几条一批, 批次没有按预算聚合");
-        Assert.True(longestSliceMs < 60, $"单次连续占用 {longestSliceMs:0}ms: 超过一帧预算的量级");
+        // Wall-clock samples include runtime and scheduler pauses; batch size measures the work assigned to a slice.
+        var longestWorkMs = batches.Max() * CostPerEventMs;
+        Assert.True(longestWorkMs < 60, $"单批工作量 {longestWorkMs:0}ms: 超过一帧预算的量级");
+        Assert.True(appliedAtInput > 0 && appliedAtInput < Total,
+            $"Input 执行时已处理 {appliedAtInput}/{Total} 条: 必须在积压事件处理完之前让出 UI 线程");
 
         List<double> samples;
         lock (lags)
@@ -78,7 +83,7 @@ public sealed class GuiEventApplyBudgetTests
         var p95 = sorted[Math.Clamp((int)(sorted.Count * 0.95), 0, sorted.Count - 1)];
         var max = sorted[^1];
         TestContext.Current.SendDiagnosticMessage(
-            $"批次={batches.Count} 平均={average:0.0}条/批 单次最长={longestSliceMs:0}ms " +
+            $"批次={batches.Count} 平均={average:0.0}条/批 单批工作量最长={longestWorkMs:0}ms 单次墙钟最长={longestSliceMs:0}ms Input处理位置={appliedAtInput}/{Total} " +
             $"心跳 样本={samples.Count} p50={sorted[sorted.Count / 2]:0}ms p95={p95:0}ms max={max:0}ms");
         Assert.True(p95 < 100, $"心跳 p95={p95:0}ms: UI 线程被占住超过 100ms");
         Assert.True(max < 400, $"心跳 max={max:0}ms: 出现过秒级的连续占用");

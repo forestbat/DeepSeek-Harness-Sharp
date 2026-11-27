@@ -98,8 +98,15 @@
             <DataTemplate DataType="vm:HostPageViewModel">
               <views:HostPageView />
             </DataTemplate>
-            <DataTemplate DataType="vm:MachinesViewModel">
-              <views:MachinesView />
+            <DataTemplate DataType="vm:MachinesPageViewModel" x:DataType="vm:MachinesPageViewModel">
+              <TabControl SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
+                <TabItem Header="机器管理">
+                  <views:MachinesView DataContext="{Binding Machines}" />
+                </TabItem>
+                <TabItem Header="跨机协作">
+                  <views:Ma2aView DataContext="{Binding NativeConsole}" />
+                </TabItem>
+              </TabControl>
             </DataTemplate>
           </ContentControl.DataTemplates>
         </ContentControl>

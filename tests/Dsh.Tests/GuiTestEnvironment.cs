@@ -13,6 +13,7 @@ using Dsh.Host;
 using Dsh.RemoteHost;
 using Dsh.Persistence;
 using Dsh.Agent;
+using Dsh.Runtime.Events;
 
 namespace Dsh.Tests;
 
@@ -59,6 +60,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
     private CancellationTokenSource? _listenerCancellation;
     private Task? _listener;
     private IDisposable? _testProvider;
+    private Func<bool>? _removeRequestCancellation;
 
     private GuiTestEnvironment(string directory, HarnessApp app, AgentLoopAgent agent, SharedApp? shared = null, IDisposable? agentHandle = null, bool sharedLease = false)
     {
@@ -73,6 +75,16 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
     public HarnessApp App { get; }
 
     public AgentLoopAgent Agent { get; }
+
+    public void CancelBeforeModelRequest()
+    {
+        _removeRequestCancellation = Agent.Ctx.OnWaterfall<AgentRequestNotification>((notification, next) =>
+        {
+            if (ReferenceEquals(notification.Payload.Agent, Agent))
+                Agent.Cancel(new AgentCancelCause.User());
+            return next();
+        });
+    }
 
     /**
      * Compose plugins off the shared headless UI thread so their async setup cannot capture its dispatcher.
@@ -405,6 +417,8 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
             await _backend.DisposeAsync().ConfigureAwait(false);
         _testProvider?.Dispose();
         _testProvider = null;
+        _removeRequestCancellation?.Invoke();
+        _removeRequestCancellation = null;
         _fleet = null;
         _backend = null;
         _listenerCancellation = null;
