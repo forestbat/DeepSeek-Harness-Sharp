@@ -13,13 +13,16 @@ internal static class Ma2aConnection
     internal const int MaximumResponseBytes = 65_536;
     private const int HeaderBytes = 12;
     private static readonly TimeSpan TransportDeadline = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan WindowsDirectoryWaitInterval = TimeSpan.FromMilliseconds(50);
 
     [SupportedOSPlatform("windows")]
-    internal static string WindowsPipeName(string stateDirectory)
+    internal static string? WindowsPipeName(string stateDirectory)
     {
-        var path = FilePathAccess.ResolveWindowsLocalDirectoryPath(stateDirectory) ?? stateDirectory;
+        var (path, missing) = FilePathAccess.ResolveWindowsLocalDirectoryPath(stateDirectory);
+        if (missing)
+            return null;
         // The daemon hashes the raw UTF-16LE code units of the resolved Windows path.
-        return $"ma2a-{Blake3.Hasher.Hash(MemoryMarshal.AsBytes(path.AsSpan()))}";
+        return $"ma2a-{Blake3.Hasher.Hash(MemoryMarshal.AsBytes((path ?? stateDirectory).AsSpan()))}";
     }
 
     internal static async Task<Stream> ConnectAsync(string stateDirectory, CancellationToken cancellationToken)
@@ -28,7 +31,15 @@ internal static class Ma2aConnection
         deadline.CancelAfter(TransportDeadline);
         if (OperatingSystem.IsWindows())
         {
-            var pipe = new NamedPipeClientStream(".", WindowsPipeName(stateDirectory), PipeDirection.InOut, PipeOptions.Asynchronous);
+            deadline.Token.ThrowIfCancellationRequested();
+            // The daemon creates the state directory before naming and binding its pipe.
+            var name = WindowsPipeName(stateDirectory);
+            while (name is null)
+            {
+                await Task.Delay(WindowsDirectoryWaitInterval, deadline.Token);
+                name = WindowsPipeName(stateDirectory);
+            }
+            var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
             try { await pipe.ConnectAsync(deadline.Token); return pipe; }
             catch { await pipe.DisposeAsync(); throw; }
         }
@@ -55,30 +66,37 @@ internal static class Ma2aConnection
         await stream.FlushAsync(deadline.Token);
     }
 
-    internal static async Task<byte[]> ReadAsync(Stream stream, ulong correlation, CancellationToken cancellationToken, bool waitForReply = true)
+    internal sealed class ResponseReader(Stream stream, ulong correlation, CancellationToken cancellationToken) : IDisposable
     {
-        var header = new byte[HeaderBytes];
-        if (waitForReply)
-            await stream.ReadExactlyAsync(header.AsMemory(0, 1), cancellationToken);
-        else
-            await ReadBoundedAsync(stream, header.AsMemory(0, 1), cancellationToken);
-        await ReadBoundedAsync(stream, header.AsMemory(1), cancellationToken);
-        var length = BinaryPrimitives.ReadUInt32BigEndian(header);
-        if (length is 0 or > MaximumResponseBytes)
-            throw new Ma2aProtocolException("invalid_frame", "The local response exceeds the protocol bound.");
-        if (BinaryPrimitives.ReadUInt64BigEndian(header.AsSpan(sizeof(uint))) != correlation)
-            throw new Ma2aProtocolException("correlation_mismatch");
-        var payload = new byte[length];
-        await ReadBoundedAsync(stream, payload, cancellationToken);
-        return payload;
-    }
+        private readonly CancellationTokenSource _deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        private readonly byte[] _header = new byte[HeaderBytes];
 
-    private static async Task ReadBoundedAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
-    {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(TransportDeadline);
-        try { await stream.ReadExactlyAsync(buffer, deadline.Token); }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        { throw new Ma2aProtocolException("invalid_frame", "The peer stalled while sending a frame."); }
+        internal async Task<byte[]> ReadAsync(bool waitForReply = false)
+        {
+            if (waitForReply)
+                await stream.ReadExactlyAsync(_header.AsMemory(0, 1), cancellationToken);
+            else
+                await ReadBoundedAsync(_header.AsMemory(0, 1));
+            await ReadBoundedAsync(_header.AsMemory(1));
+            var length = BinaryPrimitives.ReadUInt32BigEndian(_header);
+            if (length is 0 or > MaximumResponseBytes)
+                throw new Ma2aProtocolException("invalid_frame", "The local response exceeds the protocol bound.");
+            if (BinaryPrimitives.ReadUInt64BigEndian(_header.AsSpan(sizeof(uint))) != correlation)
+                throw new Ma2aProtocolException("correlation_mismatch");
+            var payload = new byte[length];
+            await ReadBoundedAsync(payload);
+            return payload;
+        }
+
+        private async Task ReadBoundedAsync(Memory<byte> buffer)
+        {
+            _deadline.CancelAfter(TransportDeadline);
+            try { await stream.ReadExactlyAsync(buffer, _deadline.Token); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            { throw new Ma2aProtocolException("invalid_frame", "The peer stalled while sending a frame."); }
+            finally { _deadline.CancelAfter(Timeout.InfiniteTimeSpan); }
+        }
+
+        public void Dispose() => _deadline.Dispose();
     }
 }

@@ -227,6 +227,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
         return WriteAsync(Ma2aFrameKind.Control, Ma2aCbor.Encode(control), cancellationToken);
     }
 
+    /// <summary>Sends control bytes from memory that must remain unchanged until the operation completes.</summary>
     public Task ControlBytesAsync(ReadOnlyMemory<byte> control, CancellationToken cancellationToken = default)
     {
         if (!_accepted || !_response.IsHostedCall)

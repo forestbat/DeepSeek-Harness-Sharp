@@ -16,6 +16,8 @@ public static class FilePathAccess
     private const int LinuxDeviceMinorOffset = 140;
     private const int DarwinInodeOffset = 8;
     private const string WindowsExtendedPrefix = @"\\?\";
+    private const int WindowsFileNotFound = 2;
+    private const int WindowsPathNotFound = 3;
     private const uint WindowsOpenExisting = 3;
     private const uint WindowsBackupSemantics = 0x02000000;
     private const int WindowsFileIdInfo = 18;
@@ -64,18 +66,18 @@ public static class FilePathAccess
         return new FileIdentity(identity[0], identity[1], identity[2]);
     }
 
-    /// <summary>Gets the OS-resolved DOS path for an existing local directory, including its extended prefix.</summary>
+    /// <summary>Gets the OS-resolved DOS path or reports that opening a local directory found no entry.</summary>
     [SupportedOSPlatform("windows")]
-    public static unsafe string? ResolveWindowsLocalDirectoryPath(string path)
+    public static unsafe (string? Path, bool Missing) ResolveWindowsLocalDirectoryPath(string path)
     {
         var root = Path.GetPathRoot(path) ?? "";
         var drive = root.StartsWith(WindowsExtendedPrefix, StringComparison.Ordinal) ? root[WindowsExtendedPrefix.Length..] : root;
         if (drive.Length != 3 || !char.IsAsciiLetter(drive[0]) || drive[1] != ':'
             || new DriveInfo(drive).DriveType == DriveType.Network)
-            return null;
+            return (null, false);
         using var handle = OpenWindowsDirectory(Path.TrimEndingDirectorySeparator(path));
         if (handle.IsInvalid)
-            return null;
+            return (null, Marshal.GetLastPInvokeError() is WindowsFileNotFound or WindowsPathNotFound);
         Span<char> buffer = stackalloc char[WindowsInitialPathChars];
         while (true)
         {
@@ -83,9 +85,9 @@ public static class FilePathAccess
             fixed (char* destination = buffer)
                 count = GetFinalPathNameByHandleW(handle, destination, (uint)buffer.Length, WindowsVolumeNameDos);
             if (count == 0)
-                return null;
+                return (null, false);
             if (count < buffer.Length)
-                return new string(buffer[..(int)count]);
+                return (new string(buffer[..(int)count]), false);
             buffer = new char[checked((int)count)];
         }
     }

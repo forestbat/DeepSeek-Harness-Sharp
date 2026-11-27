@@ -83,9 +83,10 @@ public sealed class Ma2aClient
 
     private static async Task<JsonElement> ReadResponseAsync(Stream stream, ulong correlation, JsonObject command, CancellationToken cancellationToken)
     {
-        var response = Ma2aJson.Parse(await Ma2aConnection.ReadAsync(stream, correlation, cancellationToken));
+        using var reader = new Ma2aConnection.ResponseReader(stream, correlation, cancellationToken);
+        var response = Ma2aJson.Parse(await reader.ReadAsync(waitForReply: true));
         if (response.TryGetProperty("type", out var type) && type.GetString() == "snapshot_fragment")
-            response = await Ma2aSnapshot.ReadAsync(stream, correlation, command["operation"]!.GetValue<string>(), response, cancellationToken);
+            response = await Ma2aSnapshot.ReadAsync(reader, command["operation"]!.GetValue<string>(), response);
         Ma2aJson.ValidateResponse(response, command);
         if (command["operation"]!.GetValue<string>() is "snapshot_fetch" or "space_list")
             Ma2aSnapshot.ValidateStampedResponse(response, command["operation"]!.GetValue<string>() == "snapshot_fetch" ? "snapshot" : "spaces");

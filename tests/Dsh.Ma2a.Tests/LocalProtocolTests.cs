@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -12,6 +14,7 @@ public sealed class LocalProtocolTests
     private const int SnapshotFragmentBytes = 16_384;
     private const ulong SnapshotRevision = 41;
     private const ulong SnapshotCorrelation = 7;
+    private const string WindowsPipeSkipReason = "Windows named pipe identities require Windows.";
     private const string SnapshotBoot = "00000000000000000000000000000001";
 
     [Fact]
@@ -19,12 +22,16 @@ public sealed class LocalProtocolTests
     public void WindowsPipeNameUsesTheFilesystemDirectoryIdentity()
     {
         if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip(WindowsPipeSkipReason);
             return;
+        }
         var directory = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}"));
         try
         {
             var statePath = directory.FullName;
             var name = Ma2aConnection.WindowsPipeName(statePath);
+            Assert.NotNull(name);
             var extendedPath = $@"\\?\{statePath}";
             var alternateCase = Path.Combine(directory.Parent!.FullName, directory.Name.ToLowerInvariant());
 
@@ -36,20 +43,115 @@ public sealed class LocalProtocolTests
     }
 
     [Fact]
+    [Trait("Platform", "WindowsOnly")]
+    public async Task WindowsPipeConnectResolvesDirectoryCreatedWhileConnecting()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip(WindowsPipeSkipReason);
+            return;
+        }
+        var root = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        try
+        {
+            var statePath = Path.Combine(root.FullName, "MixedCaseState");
+            var alias = Path.Combine(root.FullName, "mixedcasestate") + "/";
+            Assert.False(Directory.Exists(alias));
+            var connecting = Ma2aConnection.ConnectAsync(alias, cancellationToken);
+            Assert.False(Directory.Exists(alias));
+            Directory.CreateDirectory(statePath);
+            var pipeName = Assert.IsType<string>(Ma2aConnection.WindowsPipeName(statePath));
+            await using var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+
+            await using var client = await connecting;
+            await server.WaitForConnectionAsync(cancellationToken);
+            await client.WriteAsync("state ready"u8.ToArray(), cancellationToken);
+            var received = new byte["state ready"u8.Length];
+            await server.ReadExactlyAsync(received, cancellationToken);
+            Assert.Equal("state ready", Encoding.UTF8.GetString(received));
+        }
+        finally { root.Delete(recursive: true); }
+    }
+
+    [Fact]
+    [Trait("Platform", "WindowsOnly")]
+    public async Task WindowsPipeNameResolvesTheStateBelowALocalJunction()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip(WindowsPipeSkipReason);
+            return;
+        }
+        var root = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var junction = Path.Combine(root.FullName, "via-junction");
+        try
+        {
+            var state = Directory.CreateDirectory(Path.Combine(root.FullName, "target", "ControlState"));
+            var command = new ProcessStartInfo("cmd.exe", "/D /C mklink /J via-junction target")
+            {
+                WorkingDirectory = root.FullName,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using var process = Process.Start(command) ?? throw new InvalidOperationException("Junction creation did not start.");
+            var error = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            Assert.True(process.ExitCode == 0, await error);
+            var expected = Ma2aConnection.WindowsPipeName(state.FullName);
+            Assert.NotNull(expected);
+            Assert.Equal(expected, Ma2aConnection.WindowsPipeName(Path.Combine(junction, state.Name)));
+        }
+        finally
+        {
+            if (Directory.Exists(junction))
+                Directory.Delete(junction);
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FramesMatchThePrivateIpcWireFormat()
     {
         using var stream = new MemoryStream();
         await Ma2aConnection.WriteAsync(stream, 7, "{}"u8.ToArray(), CancellationToken.None);
         Assert.Equal("0000000200000000000000077B7D", Convert.ToHexString(stream.ToArray()));
         stream.Position = 0;
-        Assert.Equal("{}", Encoding.UTF8.GetString(await Ma2aConnection.ReadAsync(stream, 7, CancellationToken.None)));
+        using var reader = new Ma2aConnection.ResponseReader(stream, 7, TestContext.Current.CancellationToken);
+        Assert.Equal("{}", Encoding.UTF8.GetString(await reader.ReadAsync(waitForReply: true)));
+    }
+
+    [Fact]
+    public async Task ResponseUsesTheCallerTokenUntilTheReplyAndReusesOneTransportDeadline()
+    {
+        using var stream = new RecordingReadStream();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await Ma2aConnection.WriteAsync(stream, 7, "{}"u8.ToArray(), cancellationToken);
+        await Ma2aConnection.WriteAsync(stream, 7, "[]"u8.ToArray(), cancellationToken);
+        stream.Position = 0;
+        using var reader = new Ma2aConnection.ResponseReader(stream, 7, cancellationToken);
+
+        Assert.Equal("{}", Encoding.UTF8.GetString(await reader.ReadAsync(waitForReply: true)));
+        Assert.Equal("[]", Encoding.UTF8.GetString(await reader.ReadAsync()));
+
+        Assert.Equal(6, stream.ReadTokens.Count);
+        Assert.Equal(cancellationToken, stream.ReadTokens[0]);
+        var transportToken = stream.ReadTokens[1];
+        Assert.True(transportToken.CanBeCanceled);
+        Assert.NotEqual(cancellationToken, transportToken);
+        Assert.All(stream.ReadTokens.Skip(1), token => Assert.Equal(transportToken, token));
     }
 
     [Fact]
     public async Task RejectsMismatchedCorrelationBeforeReadingPayload()
     {
         using var stream = new MemoryStream(Convert.FromHexString("0000000200000000000000087B7D"));
-        var error = await Assert.ThrowsAsync<Ma2aProtocolException>(() => Ma2aConnection.ReadAsync(stream, 7, CancellationToken.None));
+        using var reader = new Ma2aConnection.ResponseReader(stream, 7, TestContext.Current.CancellationToken);
+        var error = await Assert.ThrowsAsync<Ma2aProtocolException>(() => reader.ReadAsync(waitForReply: true));
         Assert.Equal("correlation_mismatch", error.Error);
     }
 
@@ -57,7 +159,8 @@ public sealed class LocalProtocolTests
     public async Task RejectsOversizedResponseBeforeAllocation()
     {
         using var stream = new MemoryStream(Convert.FromHexString("000100010000000000000007"));
-        var error = await Assert.ThrowsAsync<Ma2aProtocolException>(() => Ma2aConnection.ReadAsync(stream, 7, CancellationToken.None));
+        using var reader = new Ma2aConnection.ResponseReader(stream, 7, TestContext.Current.CancellationToken);
+        var error = await Assert.ThrowsAsync<Ma2aProtocolException>(() => reader.ReadAsync(waitForReply: true));
         Assert.Equal("invalid_frame", error.Error);
     }
 
@@ -122,7 +225,8 @@ public sealed class LocalProtocolTests
             ["data_hex"] = Convert.ToHexStringLower(Encoding.UTF8.GetBytes(envelope)),
         };
         using var stream = new MemoryStream();
-        var response = await Ma2aSnapshot.ReadAsync(stream, 7, "snapshot_fetch", Ma2aJson.Parse(Encoding.UTF8.GetBytes(fragment.ToJsonString())), CancellationToken.None);
+        using var reader = new Ma2aConnection.ResponseReader(stream, 7, TestContext.Current.CancellationToken);
+        var response = await Ma2aSnapshot.ReadAsync(reader, "snapshot_fetch", Ma2aJson.Parse(Encoding.UTF8.GetBytes(fragment.ToJsonString())));
         Assert.Equal(4UL, response.GetProperty("result").GetProperty("payload").GetProperty("revision").GetUInt64());
     }
 
@@ -137,7 +241,8 @@ public sealed class LocalProtocolTests
             ["data_hex"] = Convert.ToHexStringLower(Encoding.UTF8.GetBytes(envelope)),
         };
         using var stream = new MemoryStream();
-        await Assert.ThrowsAsync<Ma2aProtocolException>(() => Ma2aSnapshot.ReadAsync(stream, 7, "snapshot_fetch", Ma2aJson.Parse(Encoding.UTF8.GetBytes(fragment.ToJsonString())), CancellationToken.None));
+        using var reader = new Ma2aConnection.ResponseReader(stream, 7, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<Ma2aProtocolException>(() => Ma2aSnapshot.ReadAsync(reader, "snapshot_fetch", Ma2aJson.Parse(Encoding.UTF8.GetBytes(fragment.ToJsonString()))));
     }
 
     [Fact]
@@ -147,9 +252,10 @@ public sealed class LocalProtocolTests
         Assert.True(envelope.Length > Ma2aConnection.MaximumResponseBytes);
         Assert.True(fragments.Length > 2);
         using var stream = ResponseFrames(fragments.Skip(1));
+        using var reader = new Ma2aConnection.ResponseReader(stream, SnapshotCorrelation, TestContext.Current.CancellationToken);
 
-        var response = await Ma2aSnapshot.ReadAsync(stream, SnapshotCorrelation, "snapshot_fetch",
-            Ma2aJson.Parse(JsonSerializer.SerializeToUtf8Bytes(fragments[0])), TestContext.Current.CancellationToken);
+        var response = await Ma2aSnapshot.ReadAsync(reader, "snapshot_fetch",
+            Ma2aJson.Parse(JsonSerializer.SerializeToUtf8Bytes(fragments[0])));
 
         Ma2aJson.ValidateResponse(response, new JsonObject { ["operation"] = "snapshot_fetch" });
         Assert.Equal(SnapshotRevision, response.GetProperty("revision").GetUInt64());
@@ -183,8 +289,9 @@ public sealed class LocalProtocolTests
         var fragments = SnapshotFragments(padded);
         var first = Ma2aJson.Parse(JsonSerializer.SerializeToUtf8Bytes(fragments[0]));
         using var stream = ResponseFrames(fragments.Skip(1));
+        using var reader = new Ma2aConnection.ResponseReader(stream, SnapshotCorrelation, TestContext.Current.CancellationToken);
 
-        var read = Ma2aSnapshot.ReadAsync(stream, SnapshotCorrelation, operation, first, TestContext.Current.CancellationToken);
+        var read = Ma2aSnapshot.ReadAsync(reader, operation, first);
         if (oversized)
         {
             var error = await Assert.ThrowsAsync<Ma2aProtocolException>(() => read);
@@ -217,9 +324,10 @@ public sealed class LocalProtocolTests
             default: throw new ArgumentException("Unknown response fixture corruption.", nameof(corruption));
         }
         using var stream = ResponseFrames(remaining);
+        using var reader = new Ma2aConnection.ResponseReader(stream, SnapshotCorrelation, TestContext.Current.CancellationToken);
 
-        await Assert.ThrowsAnyAsync<IOException>(() => Ma2aSnapshot.ReadAsync(stream, SnapshotCorrelation, "snapshot_fetch",
-            Ma2aJson.Parse(JsonSerializer.SerializeToUtf8Bytes(fragments[0])), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<IOException>(() => Ma2aSnapshot.ReadAsync(reader, "snapshot_fetch",
+            Ma2aJson.Parse(JsonSerializer.SerializeToUtf8Bytes(fragments[0]))));
     }
 
     private static (byte[] Envelope, JsonObject[] Fragments) FragmentedSnapshot()
@@ -264,5 +372,16 @@ public sealed class LocalProtocolTests
         }
         stream.Position = 0;
         return stream;
+    }
+
+    private sealed class RecordingReadStream : MemoryStream
+    {
+        public List<CancellationToken> ReadTokens { get; } = [];
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ReadTokens.Add(cancellationToken);
+            return base.ReadAsync(buffer, cancellationToken);
+        }
     }
 }

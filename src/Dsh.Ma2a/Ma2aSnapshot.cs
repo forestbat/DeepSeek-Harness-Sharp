@@ -10,7 +10,7 @@ internal static class Ma2aSnapshot
     private const int BootIdBytes = 16;
     private static readonly HashSet<string> FragmentFields = ["type", "revision", "runtime_boot_id", "index", "last", "data_hex"];
 
-    internal static async Task<JsonElement> ReadAsync(Stream stream, ulong correlation, string operation, JsonElement first, CancellationToken cancellationToken)
+    internal static async Task<JsonElement> ReadAsync(Ma2aConnection.ResponseReader reader, string operation, JsonElement first)
     {
         var expectedType = operation switch
         {
@@ -26,7 +26,7 @@ internal static class Ma2aSnapshot
             var last = Append(fragment, stamp, index, bytes);
             if (last) break;
             index = checked(index + 1);
-            fragment = Ma2aJson.Parse(await Ma2aConnection.ReadAsync(stream, correlation, cancellationToken, waitForReply: false));
+            fragment = Ma2aJson.Parse(await reader.ReadAsync());
         }
         var response = Ma2aJson.Parse(bytes.WrittenMemory);
         ValidateAssembled(response, stamp, expectedType);
