@@ -40,11 +40,13 @@ public sealed class Ma2aNavigationTests
                 Render(window);
                 Assert.Same(machinesEntry.CommandParameter, workspace.ActivePage);
                 var tabs = MachinesTabs(window);
+                var machinesPage = Assert.IsType<MachinesPageViewModel>(tabs.DataContext);
                 Assert.Equal(0, tabs.SelectedIndex);
                 Assert.Same(workspace.Machines, VisibleView<MachinesView>(tabs).DataContext);
 
                 tabs.SelectedIndex = 1;
                 Render(window);
+                Assert.Equal(1, machinesPage.SelectedTabIndex);
                 var nativeView = VisibleView<Ma2aView>(tabs);
                 var console = Assert.IsType<Ma2aViewModel>(nativeView.DataContext);
                 var connect = nativeView.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "连接"));
@@ -53,8 +55,9 @@ public sealed class Ma2aNavigationTests
                 StateDirectoryBox(nativeView).SetCurrentValue(TextBox.TextProperty, directory);
                 Assert.Equal(directory, console.StateDirectory);
 
-                tabs.SelectedIndex = 0;
+                machinesPage.SelectedTabIndex = 0;
                 Render(window);
+                Assert.Equal(0, tabs.SelectedIndex);
                 Assert.False(nativeView.IsAttachedToVisualTree() && nativeView.IsEffectivelyVisible);
                 Assert.Same(workspace.Machines, VisibleView<MachinesView>(tabs).DataContext);
                 tabs.SelectedIndex = 1;

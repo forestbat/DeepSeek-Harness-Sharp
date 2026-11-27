@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dsh.Ma2a.Services;
 using Avalonia;
 using Avalonia.Controls;
@@ -266,6 +267,37 @@ public sealed class Ma2aGuiTests
         Assert.Equal(["connections", "spaces", "reachability"], nodes.Select(node => node.Label));
         Assert.Equal("state: connected", Assert.Single(Assert.Single(nodes[0].Children).Children).Label);
         Assert.Equal("files read: False", Assert.Single(Assert.Single(nodes[1].Children).Children).Label);
+    }
+
+    [Fact]
+    public void ResultTree_DisplaysEquivalentValuesAndDetectsChangedTelemetry()
+    {
+        using var snapshot = JsonDocument.Parse("""{"peer_status":[{"peer_name":"peer \"A\"\nready"},true,false,null,18446744073709551615,[]]}""");
+        var response = new JsonArray(new JsonObject { ["peer_name"] = "peer \"A\"\nready" }, true, false, null, ulong.MaxValue, new JsonArray());
+        var responseBody = new JsonObject { ["peer_status"] = response };
+        var snapshotTree = Assert.Single(Ma2aResultNode.ChildrenOf(snapshot.RootElement));
+        var responseTree = Assert.Single(Ma2aResultNode.ChildrenOf(responseBody));
+
+        Assert.Equal("peer status", snapshotTree.Label);
+        Assert.Equal(["[0]", "[1]: True", "[2]: False", "[3]: ", "[4]: 18446744073709551615", "[5]"],
+            snapshotTree.Children.Select(node => node.Label));
+        Assert.Equal("peer name: peer \"A\"\nready", Assert.Single(snapshotTree.Children[0].Children).Label);
+        Assert.Empty(snapshotTree.Children[5].Children);
+        Assert.True(snapshotTree.HasSameContent(responseTree));
+
+        response[1] = false;
+        Assert.False(snapshotTree.HasSameContent(Assert.Single(Ma2aResultNode.ChildrenOf(responseBody))));
+    }
+
+    [Theory]
+    [InlineData("null", "value: ")]
+    [InlineData("false", "value: False")]
+    [InlineData("\"peer A\"", "value: peer A")]
+    public void ResultTree_DisplaysRootScalars(string json, string label)
+    {
+        using var value = JsonDocument.Parse(json);
+        Assert.Equal(label, Assert.Single(Ma2aResultNode.ChildrenOf(value.RootElement)).Label);
+        Assert.Equal(label, Assert.Single(Ma2aResultNode.ChildrenOf(JsonNode.Parse(json))).Label);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Avalonia.Media;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Dsh.Gui.ViewModels;
 
@@ -21,11 +22,13 @@ public sealed class WorkspacePageEntry(string id, string label, Geometry icon, F
     public object Create(WorkspacePageContext context) => factory(context);
 }
 
-public sealed class MachinesPageViewModel(MachinesViewModel machines)
+public sealed partial class MachinesPageViewModel(MachinesViewModel machines) : ObservableObject
 {
     public MachinesViewModel Machines { get; } = machines;
     public Ma2aViewModel NativeConsole { get; } = new();
-    public int SelectedTabIndex { get; set; }
+
+    [ObservableProperty]
+    private int _selectedTabIndex;
 }
 
 /**

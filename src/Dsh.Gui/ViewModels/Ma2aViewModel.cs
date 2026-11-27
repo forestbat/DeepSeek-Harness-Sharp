@@ -358,33 +358,50 @@ public sealed record Ma2aResultNode(string Label, IReadOnlyList<Ma2aResultNode> 
         return true;
     }
 
-    public static IReadOnlyList<Ma2aResultNode> ChildrenOf(JsonElement value) => value.ValueKind switch
-    {
-        JsonValueKind.Object => value.EnumerateObject().Select(item => Create(item.Name, item.Value)).ToArray(),
-        JsonValueKind.Array => value.EnumerateArray().Select((item, index) => Create($"[{index}]", item)).ToArray(),
-        _ => [Create("value", value)],
-    };
+    public static IReadOnlyList<Ma2aResultNode> ChildrenOf(JsonElement value) => ProjectRoot(new(value, null));
 
-    private static Ma2aResultNode Create(string name, JsonElement value) => value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
-        ? new(name.Replace('_', ' '), ChildrenOf(value)) : new($"{name.Replace('_', ' ')}: {value}", []);
+    internal static IReadOnlyList<Ma2aResultNode> ChildrenOf(JsonNode? value) => ProjectRoot(new(default, value));
 
-    internal static IReadOnlyList<Ma2aResultNode> ChildrenOf(JsonNode? value) => value switch
-    {
-        JsonObject obj => obj.Select(item => Create(item.Key, item.Value)).ToArray(),
-        JsonArray array => array.Select((item, index) => Create($"[{index}]", item)).ToArray(),
-        _ => [Create("value", value)],
-    };
+    private static Ma2aResultNode[] ProjectRoot(ResultValue value) => value.ProjectChildren() ?? [Create("value", value)];
 
-    private static Ma2aResultNode Create(string name, JsonNode? value)
+    private static Ma2aResultNode Create(string name, ResultValue value)
     {
         var label = name.Replace('_', ' ');
-        if (value is JsonObject or JsonArray) return new(label, ChildrenOf(value));
-        var text = value switch
+        return value.ProjectChildren() is { } children ? new(label, children) : new($"{label}: {value.Text}", []);
+    }
+
+    private static Ma2aResultNode[] Project<T>(
+        int count, IEnumerable<T> children, Func<T, (string? Name, ResultValue Value)> read)
+    {
+        if (count == 0) return [];
+        var result = new Ma2aResultNode[count];
+        var index = 0;
+        foreach (var child in children)
         {
-            JsonValue scalar when scalar.TryGetValue<bool>(out var boolean) => boolean.ToString(),
-            null => "",
-            _ => value.ToString(),
+            var (name, value) = read(child);
+            result[index] = Create(name ?? $"[{index}]", value);
+            index++;
+        }
+        return result;
+    }
+
+    private readonly record struct ResultValue(JsonElement Element, JsonNode? Node)
+    {
+        public Ma2aResultNode[]? ProjectChildren() => Node switch
+        {
+            JsonObject obj => Project(obj.Count, obj, static item => (item.Key, new(default, item.Value))),
+            JsonArray array => Project(array.Count, array, static item => (null, new(default, item))),
+            _ => Element.ValueKind switch
+            {
+                JsonValueKind.Object => Project(Element.GetPropertyCount(), Element.EnumerateObject(),
+                    static item => (item.Name, new(item.Value, null))),
+                JsonValueKind.Array => Project(Element.GetArrayLength(), Element.EnumerateArray(),
+                    static item => (null, new(item, null))),
+                _ => null,
+            },
         };
-        return new($"{label}: {text}", []);
+
+        public string Text => Node is JsonValue scalar && scalar.TryGetValue<bool>(out var boolean)
+            ? boolean.ToString() : Node?.ToString() ?? Element.ToString();
     }
 }
