@@ -50,6 +50,7 @@ public sealed partial class MainWindow : Window
         ViewModel = new MainViewModel(app, chat);
         DataContext = ViewModel;
         ConnectWorkspace(ViewModel.Workspace);
+        ViewModel.Workbench.AttachWindow(this);
         ViewModel.DecisionRequested += ShowDecisionAsync;
         Opened += (_, _) => ViewModel.RefreshPendingDialogs();
         ViewModel.CopyRequested += CopyToClipboard;
@@ -174,6 +175,8 @@ public sealed partial class MainWindow : Window
     {
         if (ViewModel is { } viewModel)
         {
+            viewModel.Workbench.DetachWindow(this);
+            viewModel.Workbench.DetachViewModel(viewModel);
             viewModel.DecisionRequested -= ShowDecisionAsync;
             viewModel.CopyRequested -= CopyToClipboard;
             viewModel.TerminalRequested -= ShowTerminal;

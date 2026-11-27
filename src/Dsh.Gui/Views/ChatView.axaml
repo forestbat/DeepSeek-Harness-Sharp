@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:gui="using:Dsh.Gui"
              xmlns:vm="using:Dsh.Gui.ViewModels"
              xmlns:views="using:Dsh.Gui.Views"
              xmlns:sys="using:System"
@@ -14,15 +15,28 @@
 
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto"
+    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto"
           Classes="chatHeader" Classes.collapsed="{Binding !IsSidebarVisible}">
       <StackPanel Spacing="2">
         <TextBlock Text="{Binding SessionTitle}" Classes="Title" />
         <TextBlock Text="{Binding SessionSubtitle}" Classes="Tertiary" />
       </StackPanel>
 
+      <ItemsControl Grid.Column="1" Name="PluginChatHeaderHost" ItemsSource="{Binding Workbench.ChatHeaderItems}"
+                    IsVisible="{Binding Workbench.HasChatHeaderItems}" Margin="8,0,0,0" VerticalAlignment="Center">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="6" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="gui:GuiSlotItem">
+            <ContentControl Content="{Binding Content}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
 
-      <Button Grid.Column="1" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
+      <Button Grid.Column="2" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Trace}" />
           <TextBlock Text="子代理" />
@@ -64,7 +78,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="2" Name="DeliverablesChip" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="交付物">
+      <Button Grid.Column="3" Name="DeliverablesChip" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="交付物">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Attach}" />
           <TextBlock Text="交付物" />
@@ -110,7 +124,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="3" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
+      <Button Grid.Column="4" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Download}" />
           <TextBlock Text="Session log" />
@@ -124,34 +138,50 @@
       </Button>
     </Grid>
 
-    <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" Margin="18,10,18,0">
-      <StackPanel Orientation="Horizontal" Spacing="16">
-        <Button Classes="Tab" Classes.selected="{Binding !IsTraceTab}" Command="{Binding ShowConversationCommand}">
-          <TextBlock Text="对话" />
-        </Button>
-        <Button Classes="Tab" Classes.selected="{Binding IsTraceTab}" Command="{Binding ShowTraceCommand}">
-          <TextBlock Text="轨迹" />
-        </Button>
-      </StackPanel>
-      <ItemsControl Grid.Column="2" ItemsSource="{Binding TraceFilters}" IsVisible="{Binding IsTraceTab}">
+    <StackPanel Grid.Row="1">
+      <Grid ColumnDefinitions="Auto,*,Auto" Margin="18,10,18,0">
+        <StackPanel Orientation="Horizontal" Spacing="16">
+          <Button Classes="Tab" Classes.selected="{Binding !IsTraceTab}" Command="{Binding ShowConversationCommand}">
+            <TextBlock Text="对话" />
+          </Button>
+          <Button Classes="Tab" Classes.selected="{Binding IsTraceTab}" Command="{Binding ShowTraceCommand}">
+            <TextBlock Text="轨迹" />
+          </Button>
+        </StackPanel>
+        <ItemsControl Grid.Column="2" ItemsSource="{Binding TraceFilters}" IsVisible="{Binding IsTraceTab}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Orientation="Horizontal" Spacing="4" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:TraceFilterViewModel">
+              <Button Classes="Chip" Classes.selected="{Binding IsSelected}"
+                      Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SelectTraceFilterCommand}"
+                      CommandParameter="{Binding}">
+                <TextBlock Text="{Binding Label}" />
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Grid>
+
+      <Border Height="1" Background="{DynamicResource Brush.Border.Subtle}" />
+
+      <ItemsControl Name="PluginChatBannerHost" ItemsSource="{Binding Workbench.ChatBanners}"
+                    IsVisible="{Binding Workbench.HasChatBanners}" Margin="18,8,18,0">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate>
-            <StackPanel Orientation="Horizontal" Spacing="4" />
+            <StackPanel Spacing="6" />
           </ItemsPanelTemplate>
         </ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate>
-          <DataTemplate x:DataType="vm:TraceFilterViewModel">
-            <Button Classes="Chip" Classes.selected="{Binding IsSelected}"
-                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SelectTraceFilterCommand}"
-                    CommandParameter="{Binding}">
-              <TextBlock Text="{Binding Label}" />
-            </Button>
+          <DataTemplate x:DataType="gui:GuiSlotItem">
+            <ContentControl Content="{Binding Content}" />
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
-    </Grid>
-
-    <Border Grid.Row="1" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Border.Subtle}" />
+    </StackPanel>
 
     <Grid Grid.Row="2" ColumnDefinitions="*,Auto" IsVisible="{Binding !IsTraceTab}">
     <ListBox Grid.Column="0" Name="MessageList" Classes="MessageList" AutoScrollToSelectedItem="False"
@@ -489,6 +519,19 @@
       <TextBlock Text="{Binding StatusText}" Classes="Tertiary" VerticalAlignment="Center" />
       <!-- 活性: 忙的时候显示"落后几条、多久没事件", 让"完成了/在跑/已死"分得开。 -->
       <TextBlock Text="{Binding ActivityText}" Classes="Tertiary" VerticalAlignment="Center" />
+      <ItemsControl Name="PluginStatusHost" ItemsSource="{Binding Workbench.StatusItems}"
+                    IsVisible="{Binding Workbench.HasStatusItems}" VerticalAlignment="Center">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="8" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="gui:GuiSlotItem">
+            <ContentControl Content="{Binding Content}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
       <TextBlock Text="{Binding TokenStats.ContextText}" Classes="Tertiary" />
       <TextBlock Text="{Binding TokenStats.Rounds}" Classes="Tertiary" />
       <TextBlock Text="{Binding TokenStats.FirstToken}" Classes="Tertiary" />

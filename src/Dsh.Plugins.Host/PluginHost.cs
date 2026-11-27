@@ -24,7 +24,8 @@ public sealed record ManagedPlugin(
     string Package,
     PluginLoadContext Context,
     IReadOnlyList<string> SharedDependencies,
-    string? InstallDirectory = null);
+    string? InstallDirectory = null,
+    string? ArtifactPath = null);
 
 public class PluginHost
 {
@@ -111,17 +112,28 @@ public class PluginHost
             }
     }
 
+    /// <summary>Reads the legacy managed plugin manifest without keeping the artifact or its managed dependencies mapped.</summary>
+    public static IReadOnlyList<string> InspectManagedPackages(string path)
+    {
+        var preview = new PluginHost();
+        var loaded = preview.TryLoad(path, mapManagedFiles: false);
+        loaded.Context?.Unload();
+        return loaded.Packages;
+    }
+
     /** 从文件装载托管插件:按类型名读取插件自带的生成清单,不反射遍历插件类型。 */
-    public PluginLoadResult TryLoad(string path)
+    public PluginLoadResult TryLoad(string path) => TryLoad(path, mapManagedFiles: true);
+
+    private PluginLoadResult TryLoad(string path, bool mapManagedFiles)
     {
         var fullPath = Path.GetFullPath(path);
-        var context = new PluginLoadContext(fullPath);
+        var context = new PluginLoadContext(fullPath, name: null, mapManagedFiles);
         IReadOnlyList<string> sharedDependencies = [];
         var referencesAdded = false;
         var retained = false;
         try
         {
-            var assembly = context.LoadFromAssemblyPath(fullPath);
+            var assembly = context.LoadManagedAssembly(fullPath);
             var registrations = ReadManifest(assembly, out var failure);
             if (failure is not null)
                 return new PluginLoadResult([], [new PluginSkip(fullPath, failure)], [], null);
@@ -285,9 +297,10 @@ public class PluginHost
             skipped.Add(new PluginSkip(file,
                 "平铺布局已废弃,将在下个版本停止扫描:请把插件及其依赖移入 plugins/<目录>/"));
         }
+        var fullPath = Path.GetFullPath(file);
         foreach (var package in result.Packages)
         {
-            managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, installDirectory));
+            managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, installDirectory, fullPath));
             packages.Add(package);
         }
     }

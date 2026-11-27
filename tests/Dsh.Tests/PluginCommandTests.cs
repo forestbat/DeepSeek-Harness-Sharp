@@ -8,6 +8,23 @@ namespace Dsh.Tests;
 
 public sealed class PluginCommandTests
 {
+    [Theory]
+    [InlineData("/plugins reload sample path with spaces.dll")]
+    [InlineData("/plugins\treload sample path with spaces.dll")]
+    [InlineData("/plugins:reload sample path with spaces.dll")]
+    public void MutationParser_UsesTheCommandGrammarAndKeepsTheArtifactPath(string input)
+    {
+        var mutation = PluginCommand.ParseMutationCommand(input);
+        Assert.Equal(new PluginCommand.Mutation("reload", "sample", "path with spaces.dll"), mutation);
+    }
+
+    [Theory]
+    [InlineData("/plugins remove --force")]
+    [InlineData("/plugins-other remove sample")]
+    [InlineData("Show me how to reload a plugin")]
+    public void MutationParser_RejectsInputThatWillNotChangePlugins(string input)
+        => Assert.Null(PluginCommand.ParseMutationCommand(input));
+
     [Fact]
     public async Task PluginsList_ShowsLoadFailureGroup_AndDoctorExplainsIt()
     {
@@ -59,6 +76,37 @@ public sealed class PluginCommandTests
             var removed = await commands.Execute(new FakeAgent(app.Ctx), "/plugins remove --force", TestContext.Current.CancellationToken);
 
             Assert.Contains("usage:", Assert.IsType<CommandResult.Error>(removed!.Result).Text);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task PluginsReload_ValidatesArguments_AndReloadsActivePackage()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dsh-plugins-cmd-{Guid.NewGuid():N}");
+        try
+        {
+            using var app = await HarnessComposer.Compose(new HarnessOptions(
+                new HarnessHome(Path.Combine(root, "home")), root, PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
+            var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+            var agent = new FakeAgent(app.Ctx);
+
+            var missingArgs = await commands.Execute(agent, "/plugins reload", TestContext.Current.CancellationToken);
+            Assert.Contains("usage:", Assert.IsType<CommandResult.Error>(missingArgs!.Result).Text);
+
+            var reloaded = await commands.Execute(agent, "/plugins reload @deepseek-ai/dsh-tool-todo", TestContext.Current.CancellationToken);
+            var text = Assert.IsType<CommandResult.Success>(reloaded!.Result).Text ?? "";
+            Assert.Contains("reloaded", text, StringComparison.Ordinal);
+            Assert.Equal(ActivationState.Active, app.Composition!.Find("@deepseek-ai/dsh-tool-todo")?.State);
         }
         finally
         {

@@ -269,7 +269,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
             foreach (var package in result.Packages.Where(hostPackages.ContainsKey))
             {
                 RegisterHost(temporary, package, path, active, hostPackages.GetValueOrDefault(package));
-                managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, InstallDirectory(path)));
+                managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, InstallDirectory(path), Path.GetFullPath(path)));
                 loaded.Add(package);
             }
         }

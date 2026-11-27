@@ -23,6 +23,7 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
 
     private HarnessRemoteHostBackend(HarnessApp app, AcpSessionServices services, HostPtySessions ptys, ExternalAgentSessions agents)
     {
+        app.Ctx.SetOwn("hostBackendInProcess", true);
         Pending = services.Pending;
         Sessions = services.Registry;
         Notifications = services.Notifications;

@@ -26,6 +26,24 @@ public sealed class PluginSandboxIntegrationTests
     private const string Alpha = "test/sandbox-alpha";
     private const string Beta = "test/sandbox-beta";
 
+    [Fact]
+    public async Task ReloadWithDifferentSandboxArtifactPathKeepsTheCurrentActivation()
+    {
+        using var fixture = new Fixture();
+        await fixture.StartAsync();
+        var current = fixture.App.Composition!.Find(Alpha);
+        Assert.NotNull(current);
+        const string alternateName = "alternate";
+        var replacement = Path.Combine(fixture.Root, $"{alternateName}.dll");
+        File.Copy(fixture.Artifact, replacement);
+        File.Copy(Path.ChangeExtension(fixture.Artifact, ".deps.json"), Path.ChangeExtension(replacement, ".deps.json"));
+
+        var result = await fixture.Manager.ReloadAsync(Alpha, replacement, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("requires the existing artifact file name", result);
+        Assert.Same(current, fixture.App.Composition.Find(Alpha));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Plugins, alternateName)));
+    }
 
     [Fact]
     public async Task BrokerSettingsAppend_ReadDenyRunsWithoutAmbientScopeBeforeDiffAndActualCommit()

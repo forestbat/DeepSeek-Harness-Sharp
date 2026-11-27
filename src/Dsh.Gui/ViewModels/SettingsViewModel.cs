@@ -608,9 +608,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsWorking = true;
         try
         {
-            Status = parts[0] is "enable" or "disable" or "remove"
-                ? await RunAsync($"/plugins {parts[0]} {parts[1]}")
-                : "未知操作";
+            Status = await ExecutePluginActionAsync(parts[0], parts[1]);
             await RefreshPluginsAsync();
         }
         catch (Exception error)
@@ -622,6 +620,26 @@ public sealed partial class SettingsViewModel : ObservableObject
             IsWorking = false;
         }
     }
+
+    private async Task<string> ExecutePluginActionAsync(string verb, string package)
+    {
+        if (verb is "enable" or "disable" or "remove")
+            return await RunAsync($"/plugins {verb} {package}");
+        if (verb != "reload")
+            return "未知操作";
+        var candidate = PluginInput.Trim();
+        var hasPath = candidate.Length > 0 && (IsPluginArtifactPath(candidate) || File.Exists(candidate));
+        var command = hasPath ? $"/plugins reload {package} {candidate}" : $"/plugins reload {package}";
+        var output = await RunAsync(command);
+        if (hasPath)
+            PluginInput = "";
+        return output;
+    }
+
+    private static bool IsPluginArtifactPath(string value)
+        => value.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
 
     [RelayCommand]
     private async Task OpenSessionsFolderAsync() => Status = await DesktopIntegration.OpenPathAsync(SessionsPath);
@@ -1112,6 +1130,8 @@ public sealed partial class PluginRowViewModel(
     public string ActionLabel => Enabled ? "禁用" : "启用";
 
     public string WireAction => $"{(Enabled ? "disable" : "enable")}:{Package}";
+
+    public string ReloadAction => $"reload:{Package}";
 
     public string RemoveAction => $"remove:{Package}";
 
