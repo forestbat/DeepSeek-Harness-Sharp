@@ -31,17 +31,31 @@ internal static class Ma2aConnection
         deadline.CancelAfter(TransportDeadline);
         if (OperatingSystem.IsWindows())
         {
-            deadline.Token.ThrowIfCancellationRequested();
-            // The daemon creates the state directory before naming and binding its pipe.
-            var name = WindowsPipeName(stateDirectory);
-            while (name is null)
+            NamedPipeClientStream? pipe = null;
+            try
             {
-                await Task.Delay(WindowsDirectoryWaitInterval, deadline.Token);
-                name = WindowsPipeName(stateDirectory);
+                deadline.Token.ThrowIfCancellationRequested();
+                // The daemon creates the state directory before naming and binding its pipe.
+                var name = WindowsPipeName(stateDirectory);
+                while (name is null)
+                {
+                    await Task.Delay(WindowsDirectoryWaitInterval, deadline.Token);
+                    name = WindowsPipeName(stateDirectory);
+                }
+                pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+                await pipe.ConnectAsync(deadline.Token);
+                return pipe;
             }
-            var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-            try { await pipe.ConnectAsync(deadline.Token); return pipe; }
-            catch { await pipe.DisposeAsync(); throw; }
+            catch (Exception error)
+            {
+                if (pipe is not null)
+                    await pipe.DisposeAsync();
+                if (error is OperationCanceledException && deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    throw new Ma2aProtocolException("connection_timeout", pipe is null
+                        ? $"The runtime did not create the state directory '{stateDirectory}' before the connection timed out. Check the path and start the runtime."
+                        : $"Timed out connecting to the named pipe for state directory '{stateDirectory}'. Check that the runtime is running for this directory.");
+                throw;
+            }
         }
         var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try

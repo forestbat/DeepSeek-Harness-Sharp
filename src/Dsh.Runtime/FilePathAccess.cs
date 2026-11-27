@@ -67,13 +67,18 @@ public static class FilePathAccess
     }
 
     /// <summary>Gets the OS-resolved DOS path or reports that opening a local directory found no entry.</summary>
+    /// <exception cref="DriveNotFoundException">The local drive has no mounted volume.</exception>
     [SupportedOSPlatform("windows")]
     public static unsafe (string? Path, bool Missing) ResolveWindowsLocalDirectoryPath(string path)
     {
         var root = Path.GetPathRoot(path) ?? "";
         var drive = root.StartsWith(WindowsExtendedPrefix, StringComparison.Ordinal) ? root[WindowsExtendedPrefix.Length..] : root;
-        if (drive.Length != 3 || !char.IsAsciiLetter(drive[0]) || drive[1] != ':'
-            || new DriveInfo(drive).DriveType == DriveType.Network)
+        if (drive.Length != 3 || !char.IsAsciiLetter(drive[0]) || drive[1] != ':')
+            return (null, false);
+        var driveType = new DriveInfo(drive).DriveType;
+        if (driveType == DriveType.NoRootDirectory)
+            throw new DriveNotFoundException($"The drive '{drive}' is unavailable. Check that it is mounted or choose a different directory.");
+        if (driveType == DriveType.Network)
             return (null, false);
         using var handle = OpenWindowsDirectory(Path.TrimEndingDirectorySeparator(path));
         if (handle.IsInvalid)

@@ -80,6 +80,79 @@ public sealed class LocalProtocolTests
         finally { root.Delete(recursive: true); }
     }
 
+    [Theory]
+    [InlineData(false, "did not create the state directory")]
+    [InlineData(true, "named pipe for state directory")]
+    [Trait("Platform", "WindowsOnly")]
+    public async Task WindowsPipeConnectReportsTheStageThatTimedOut(bool createDirectory, string expectedContext)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip(WindowsPipeSkipReason);
+            return;
+        }
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(WindowsPipeTestDeadline);
+        var statePath = Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}");
+        var directory = createDirectory ? Directory.CreateDirectory(statePath) : null;
+        try
+        {
+            var error = await Assert.ThrowsAsync<Ma2aProtocolException>(
+                () => Ma2aConnection.ConnectAsync(statePath, deadline.Token));
+
+            Assert.Equal("connection_timeout", error.Error);
+            Assert.Contains(expectedContext, error.Message);
+            Assert.Contains(statePath, error.Message);
+        }
+        finally { directory?.Delete(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Platform", "WindowsOnly")]
+    public async Task WindowsPipeConnectPreservesCallerCancellation(bool createDirectory)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip(WindowsPipeSkipReason);
+            return;
+        }
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var statePath = Path.Combine(AppContext.BaseDirectory, $"ControlState-{Guid.NewGuid():N}");
+        var directory = createDirectory ? Directory.CreateDirectory(statePath) : null;
+        try
+        {
+            var connecting = Ma2aConnection.ConnectAsync(statePath, cancellation.Token);
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connecting);
+        }
+        finally { directory?.Delete(); }
+    }
+
+    [Fact]
+    [Trait("Platform", "WindowsOnly")]
+    public async Task WindowsPipeConnectRejectsAnUnmountedDriveImmediately()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip(WindowsPipeSkipReason);
+            return;
+        }
+        var assignedDrives = DriveInfo.GetDrives().Select(drive => drive.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var driveRoot = Enumerable.Range('A', 'Z' - 'A' + 1)
+            .Select(letter => $@"{(char)letter}:\").Last(candidate => !assignedDrives.Contains(candidate));
+        var connecting = Ma2aConnection.ConnectAsync(Path.Combine(driveRoot, "ControlState"), TestContext.Current.CancellationToken);
+        var rejectedImmediately = connecting.IsFaulted;
+
+        var error = await Assert.ThrowsAsync<DriveNotFoundException>(() => connecting);
+
+        Assert.True(rejectedImmediately);
+        Assert.Contains(driveRoot, error.Message);
+        Assert.Contains("mounted", error.Message);
+    }
+
     [Fact]
     [Trait("Platform", "WindowsOnly")]
     public async Task WindowsPipeNameResolvesTheStateBelowALocalJunction()
