@@ -146,7 +146,19 @@ public sealed class RemoteEditorClient(RemoteHostClient host, JsonRpcChannel rpc
         }
         if (host.IsClosed)
             return;
-        await rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, token).ConfigureAwait(false);
+        try
+        {
+            await rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when ((IsDisposed() || host.IsClosed)
+            && error is IOException or ObjectDisposedException or OperationCanceledException or ConnectionLostException)
+        {
+        }
+    }
+
+    private bool IsDisposed()
+    {
+        lock (_gate) return _disposed;
     }
 
     public ValueTask DisposeAsync()

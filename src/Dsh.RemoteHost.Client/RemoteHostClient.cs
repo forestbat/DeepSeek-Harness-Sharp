@@ -29,15 +29,15 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
     private RemoteHostClient(JsonRpcChannel channel)
     {
         _channel = channel;
-        _rpc = channel.Attach<IHostRpc>();
-        Agent = new RemoteAgentClient(this, channel.Attach<IAgentRpc>());
-        _pty = new RemotePtyClient(this, channel.Attach<IPtyRpc>());
-        Files = new RemoteFilesClient(this, channel.Attach<IFilesRpc>());
-        Git = new RemoteGitClient(this, channel.Attach<IGitRpc>());
-        _notifications = new RemoteNotificationsClient(this, channel.Attach<INotificationsRpc>());
-        SessionEditing = new RemoteSessionEditingClient(this, channel.Attach<ISessionEditingRpc>());
-        Plugins = new RemotePluginsClient(this, channel.Attach<IPluginsRpc>());
-        Network = new RemoteNetworkClient(this, channel.Attach<INetworkRpc>());
+        _rpc = channel.AttachGenerated<IHostRpc>();
+        Agent = new RemoteAgentClient(this, channel.AttachGenerated<IAgentRpc>());
+        _pty = new RemotePtyClient(this, channel.AttachGenerated<IPtyRpc>());
+        Files = new RemoteFilesClient(this, channel.AttachGenerated<IFilesRpc>());
+        Git = new RemoteGitClient(this, channel.AttachGenerated<IGitRpc>());
+        _notifications = new RemoteNotificationsClient(this, channel.AttachGenerated<INotificationsRpc>());
+        SessionEditing = new RemoteSessionEditingClient(this, channel.AttachGenerated<ISessionEditingRpc>());
+        Plugins = new RemotePluginsClient(this, channel.AttachGenerated<IPluginsRpc>());
+        Network = new RemoteNetworkClient(this, channel.AttachGenerated<INetworkRpc>());
         Editor = new RemoteEditorClient(this, channel);
         _ = ObserveClosedAsync(channel.Completion);
     }
@@ -96,7 +96,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         RemoteHostClient? client = null;
         var target = new ClientTarget();
         var channel = JsonRpcChannel.Connect(duplex, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default),
-            [target], target.Methods());
+            contracts: [new(RpcTargetMetadata.FromShape<IHostPush>(), target)], methods: target.Methods());
         try
         {
             client = new RemoteHostClient(channel);
