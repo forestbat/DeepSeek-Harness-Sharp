@@ -48,6 +48,40 @@ public sealed class HostSessionSnapshotTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BoundedHistory_LoadsAnExactWindowWithAndWithoutCompressedSlices(bool supportsSlices)
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hsw", Ct,
+            hiddenCapabilities: supportsSlices ? null : [HostProtocol.LogSliceCapability],
+            snapshotPageBytes: 4096);
+        var session = host.Environment.Agent.Session;
+        const int from = 35;
+        const int count = 70;
+        const int historyLength = 150;
+        for (var index = 0; index < historyLength; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"history event {index}")), new SurfaceOp.Append());
+        var store = host.Environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
+        await store.Flush(session);
+        var reader = await host.ConnectAsync("history-window", Ct);
+        Assert.Equal(supportsSlices, reader.Supports(HostProtocol.LogSliceCapability));
+
+        var window = await reader.GetSessionHistoryRangeAsync(session.Id.Value, from, count, Ct);
+        var tail = await reader.GetSessionHistoryRangeAsync(session.Id.Value, historyLength - 3, count, Ct);
+        var empty = await reader.GetSessionHistoryRangeAsync(session.Id.Value, historyLength, count, Ct);
+
+        Assert.Equal(historyLength, window.TotalEventCount);
+        Assert.Equal(session.Id, window.Header.Id);
+        Assert.Equal(Enumerable.Range(from, count).Select(index => (long)index), window.Events.Select(item => item.Seq));
+        Assert.Equal(Enumerable.Range(from, count).Select(index => $"history event {index}"), window.Events.Select(item =>
+            MessageText.Flatten(Assert.IsType<UserMessagePayload>(item.Data).Message.Content)));
+        Assert.Equal(supportsSlices, window.LogRevision.Length == 0);
+        Assert.Equal(Enumerable.Range(historyLength - 3, 3).Select(index => (long)index), tail.Events.Select(item => item.Seq));
+        Assert.Empty(empty.Events);
+        Assert.True(await reader.PingAsync(Ct) > 0);
+    }
+
     /** 一段远超单页预算的历史。 */
     private static int FillOversizedHistory(Session session)
     {
