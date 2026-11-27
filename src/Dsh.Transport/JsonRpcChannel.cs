@@ -1,7 +1,11 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using StreamJsonRpc;
 
 namespace Dsh.Transport;
+
+/** A statically described contract and its implementation on one RPC connection. */
+public readonly record struct JsonRpcTarget(RpcTargetMetadata Metadata, object Instance);
 
 /**
  * 跨进程 RPC 的唯一入口。
@@ -28,54 +32,54 @@ public sealed class JsonRpcChannel : IDisposable
     /** 连接结束(正常关闭或对端断开)时完成。 */
     public Task Completion => _rpc.Completion;
 
-    /** 发起方: 拿到契约接口的代理; targets 是本端实现的契约对象, 供对端反向调用。 */
-    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, params object[] targets)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, []);
+    /** Registers statically described local contracts for reverse calls on an outgoing connection. */
+    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, params JsonRpcTarget[] contracts)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, []);
 
-    /** 服务方: 把每个实现契约的对象挂到同一条 Stream 上; 一个对象可以实现多个契约接口。 */
-    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, params object[] targets)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, []);
+    /** Registers statically described local contracts on an incoming connection. */
+    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, params JsonRpcTarget[] contracts)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, []);
 
-    /** 服务方: 契约对象 + 只实现一次的方法名委托, 两类可以混用。 */
-    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, object[] targets,
+    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, IReadOnlyList<JsonRpcTarget> contracts,
         (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, methods);
 
-    /** 发起方: 契约对象 + 只实现一次的方法名委托。 */
-    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, object[] targets,
+    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, IReadOnlyList<JsonRpcTarget> contracts,
         (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, methods);
 
     /** 只实现一次的内部协议: 直接按方法名挂委托, 不必为此定义接口。 */
     public static JsonRpcChannel ServeMethods(Stream duplex, IJsonRpcMessageFormatter formatter,
         params (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), [], methods);
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts: [], methods: methods);
 
-    private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, object[] targets,
+    private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, IReadOnlyList<JsonRpcTarget> contracts,
         (string Method, Delegate Handler)[] methods)
     {
         var rpc = new JsonRpc(handler);
-        foreach (var target in targets)
-            rpc.AddLocalRpcTarget(target);
-        foreach (var (method, handler1) in methods)
-            rpc.AddLocalRpcMethod(method, handler1);
+        foreach (var contract in contracts)
+            rpc.AddLocalRpcTarget(contract.Metadata, contract.Instance, null);
+        foreach (var (method, implementation) in methods)
+            rpc.AddLocalRpcMethod(method, implementation);
         rpc.StartListening();
         return new JsonRpcChannel(rpc);
     }
 
-    /**
-     * 取契约接口的代理, 指向对端注册的那份实现。
-     *
-     * StreamJsonRpc 的强类型代理是运行时生成的(Reflection.Emit), NativeAOT 下必然不可用。
-     * 那种情况下库只会抛一句 "CreateProxy is not supported if dynamic code is not supported",
-     * 从这里就能看出是"这个入口被编成了 AOT", 而不是协议或配置出错。
-     */
+    /** Creates a source-generated proxy for the contract registered by the peer. */
+    public T AttachGenerated<T>() where T : class => _rpc.Attach<T>();
+
+    /** Creates a proxy for a JIT caller whose contract may require runtime generation. */
+    [RequiresUnreferencedCode("Dynamic JSON-RPC proxy generation requires all contract members.")]
     public T Attach<T>() where T : class
-        => RuntimeFeature.IsDynamicCodeSupported
-            ? _rpc.Attach<T>()
-            : throw new NotSupportedException(
-                $"transferring {typeof(T).Name} as a typed JSON-RPC proxy needs runtime code generation; "
-                + "this entry must be published as the JIT build, not NativeAOT");
+    {
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+            throw new NotSupportedException(
+                $"The {typeof(T).Name} JSON-RPC proxy requires runtime code generation. Publish this entry as JIT or use a generated proxy.");
+
+        // A method group keeps this fallback on the library's JIT path instead of the interceptor.
+        Func<T> runtimeAttach = _rpc.Attach<T>;
+        return runtimeAttach();
+    }
 
     /** 按方法名调用(不带接口)。参数按位置序列化。 */
     public async Task<T> InvokeAsync<T>(string method, CancellationToken cancellationToken, params object?[] args)

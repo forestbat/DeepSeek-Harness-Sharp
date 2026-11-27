@@ -61,7 +61,7 @@ public sealed class SessionWriteTicketTests : IDisposable
             writer.Flush();
         }
 
-        WriteTicket(store, session.Header, expiresInSeconds: 30, writerId: "somebody-else", epoch: 3, nextSeq: 99);
+        WriteTicket(store, session.Header, expiresUtc: DateTimeOffset.MaxValue.ToUnixTimeMilliseconds(), writerId: "somebody-else", epoch: 3, nextSeq: 99);
 
         using var second = new JsonlSessionPersistence(_root, compression: JsonlCompression.None);
         using var other = second.Open(session.Id, SessionAccess.Write);
@@ -86,7 +86,7 @@ public sealed class SessionWriteTicketTests : IDisposable
         }
 
         // 票面写着 nextSeq=99(它发了号却没写成): 接管时必须忽略它, 否则日志凭空出现空洞。
-        WriteTicket(store, session.Header, expiresInSeconds: -30, writerId: "dead-writer", epoch: 7, nextSeq: 99);
+        WriteTicket(store, session.Header, expiresUtc: DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds(), writerId: "dead-writer", epoch: 7, nextSeq: 99);
 
         using var second = new JsonlSessionPersistence(_root, compression: JsonlCompression.None);
         using var other = second.Open(session.Id, SessionAccess.Write);
@@ -110,6 +110,20 @@ public sealed class SessionWriteTicketTests : IDisposable
             writer.Flush();
             Assert.False(File.Exists(TicketPath(store, session.Header)), "票应在落盘后消失, 否则空闲进程会一直占着发号权");
         }
+    }
+
+    [Fact]
+    public void TicketUpdate_WithAnOpenReader_PreservesSequenceNumbers()
+    {
+        var path = Path.Join(_root, "ticket.json");
+        Assert.Equal(0, SessionWriteTicket.NextSeq(path, storedCount: 0, count: 1));
+
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            Assert.Equal(1, SessionWriteTicket.NextSeq(path, storedCount: 0, count: 1));
+
+        Assert.Equal(2, SessionWriteTicket.Inspect(path)!.NextSeq);
+        SessionWriteTicket.MarkDurable(path, durableUpTo: 2);
+        Assert.Null(SessionWriteTicket.Inspect(path));
     }
 
     /** 关掉第一个写句柄之后, 第二个写者接着写, 序号从日志末尾继续。 */
@@ -155,13 +169,12 @@ public sealed class SessionWriteTicketTests : IDisposable
     }
 
     /** 手写票文件: 钉住磁盘格式, 也用来构造"别人的票"这种真实运行中难以复现的状态。 */
-    private void WriteTicket(JsonlSessionPersistence store, SessionHeader header, int expiresInSeconds,
+    private void WriteTicket(JsonlSessionPersistence store, SessionHeader header, long expiresUtc,
         string writerId, long epoch, long nextSeq)
     {
         var path = TicketPath(store, header);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var expires = DateTimeOffset.UtcNow.AddSeconds(expiresInSeconds).ToUnixTimeMilliseconds();
         File.WriteAllText(path,
-            $$"""{"pid":2000000,"machine":"{{Environment.MachineName}}","processStartUtc":1,"epoch":{{epoch}},"writerId":"{{writerId}}","expiresUtc":{{expires}},"nextSeq":{{nextSeq}}}""");
+            $$"""{"pid":2000000,"machine":"{{Environment.MachineName}}","processStartUtc":1,"epoch":{{epoch}},"writerId":"{{writerId}}","expiresUtc":{{expiresUtc}},"nextSeq":{{nextSeq}}}""");
     }
 }

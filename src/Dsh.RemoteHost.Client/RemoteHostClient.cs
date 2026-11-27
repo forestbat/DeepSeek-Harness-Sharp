@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using Dsh.Core;
 using Dsh.Ide;
 using Dsh.Ide.Bridge;
+using Dsh.Persistence;
 using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
 
@@ -29,15 +30,15 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
     private RemoteHostClient(JsonRpcChannel channel)
     {
         _channel = channel;
-        _rpc = channel.Attach<IHostRpc>();
-        Agent = new RemoteAgentClient(this, channel.Attach<IAgentRpc>());
-        _pty = new RemotePtyClient(this, channel.Attach<IPtyRpc>());
-        Files = new RemoteFilesClient(this, channel.Attach<IFilesRpc>());
-        Git = new RemoteGitClient(this, channel.Attach<IGitRpc>());
-        _notifications = new RemoteNotificationsClient(this, channel.Attach<INotificationsRpc>());
-        SessionEditing = new RemoteSessionEditingClient(this, channel.Attach<ISessionEditingRpc>());
-        Plugins = new RemotePluginsClient(this, channel.Attach<IPluginsRpc>());
-        Network = new RemoteNetworkClient(this, channel.Attach<INetworkRpc>());
+        _rpc = channel.AttachGenerated<IHostRpc>();
+        Agent = new RemoteAgentClient(this, channel.AttachGenerated<IAgentRpc>());
+        _pty = new RemotePtyClient(this, channel.AttachGenerated<IPtyRpc>());
+        Files = new RemoteFilesClient(this, channel.AttachGenerated<IFilesRpc>());
+        Git = new RemoteGitClient(this, channel.AttachGenerated<IGitRpc>());
+        _notifications = new RemoteNotificationsClient(this, channel.AttachGenerated<INotificationsRpc>());
+        SessionEditing = new RemoteSessionEditingClient(this, channel.AttachGenerated<ISessionEditingRpc>());
+        Plugins = new RemotePluginsClient(this, channel.AttachGenerated<IPluginsRpc>());
+        Network = new RemoteNetworkClient(this, channel.AttachGenerated<INetworkRpc>());
         Editor = new RemoteEditorClient(this, channel);
         _ = ObserveClosedAsync(channel.Completion);
     }
@@ -96,7 +97,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         RemoteHostClient? client = null;
         var target = new ClientTarget();
         var channel = JsonRpcChannel.Connect(duplex, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default),
-            [target], target.Methods());
+            contracts: [new(RpcTargetMetadata.FromShape<IHostPush>(), target)], methods: target.Methods());
         try
         {
             client = new RemoteHostClient(channel);
@@ -204,6 +205,71 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
      */
     public Task<RemoteLogSlice> GetSessionLogSliceAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken = default)
         => _rpc.GetSessionLogSliceAsync(new RemoteLogSliceRequest(sessionId, fromEvent, maxEvents), cancellationToken);
+
+    /// <summary>Reads a bounded history window, preferring the host's existing compressed log slices.</summary>
+    public async Task<RemoteSessionSnapshot> GetSessionHistoryRangeAsync(
+        string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(fromEvent);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
+        if (Supports(HostProtocol.LogSliceCapability)
+            && await TryReadHistorySliceAsync(sessionId, fromEvent, maxEvents, cancellationToken).ConfigureAwait(false) is { } slice)
+            return slice;
+
+        var page = await GetSessionSnapshotRangeAsync(sessionId, fromEvent, maxEvents, cancellationToken).ConfigureAwait(false);
+        var events = new List<SessionEvent>();
+        while (page.Events.Count > 0)
+        {
+            foreach (var sessionEvent in page.Events)
+            {
+                if (sessionEvent.Seq != fromEvent + events.Count)
+                    throw new InvalidDataException($"Session history is missing event #{fromEvent + events.Count}.");
+                events.Add(sessionEvent);
+                if (events.Count == maxEvents)
+                    break;
+            }
+            var next = fromEvent + events.Count;
+            if (events.Count >= maxEvents || next >= page.TotalEventCount)
+                break;
+            page = await GetSessionSnapshotRangeAsync(sessionId, next, maxEvents - events.Count, cancellationToken).ConfigureAwait(false);
+        }
+        if (events.Count < maxEvents && fromEvent + events.Count < page.TotalEventCount)
+            throw new InvalidDataException($"Session history is missing event #{fromEvent + events.Count}.");
+        return page with { Events = events };
+    }
+
+    private async Task<RemoteSessionSnapshot?> TryReadHistorySliceAsync(
+        string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var slice = await GetSessionLogSliceAsync(sessionId, fromEvent, maxEvents, cancellationToken).ConfigureAwait(false);
+            if (slice.FromSeq > fromEvent || slice.FromSeq + slice.EventCount - fromEvent < maxEvents
+                || (slice.ContentHash.Length > 0 && SessionLogSlice.HashOf(slice.Bytes) != slice.ContentHash))
+                return null;
+
+            var events = new List<SessionEvent>(maxEvents);
+            foreach (var batch in SessionLogSliceParser.ParseBatches(slice.Bytes, slice.FromSeq))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var sessionEvent in batch)
+                {
+                    if (sessionEvent.Seq < fromEvent || sessionEvent.Seq - fromEvent >= maxEvents)
+                        continue;
+                    if (sessionEvent.Seq != fromEvent + events.Count)
+                        return null;
+                    events.Add(sessionEvent);
+                }
+            }
+            return events.Count == maxEvents
+                ? new RemoteSessionSnapshot(slice.Header, events, slice.TotalEventCount, slice.ApprovalPolicy)
+                : null;
+        }
+        catch (Exception error) when (error is RemoteInvocationException or FormatException)
+        {
+            return null;
+        }
+    }
 
     /** 整段历史有多少条; 用一个越界请求问, 服务端只回总数不回事件。 */
     public async Task<long> TotalEventCountAsync(string sessionId, CancellationToken cancellationToken = default)
