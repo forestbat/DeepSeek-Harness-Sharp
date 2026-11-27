@@ -39,8 +39,15 @@ internal static class TempTree
 
     /** 建一个仓库内的浅目录(名字为 prefix + 6 位十六进制), 供 Unix 域套接字路径使用。 */
     public static string CreateSocketDirectory(string prefix)
+        => CreateSocketDirectory(SocketRoot, prefix);
+
+    /** Uses a shorter root for peers with a fixed nested socket path. */
+    public static string CreateCompactSocketDirectory()
+        => CreateSocketDirectory(Path.Combine(RepositoryRoot, ".uds"), "");
+
+    private static string CreateSocketDirectory(string root, string prefix)
     {
-        var directory = Path.Combine(SocketRoot, prefix + Guid.NewGuid().ToString("N")[..6]);
+        var directory = Path.Combine(root, prefix + Guid.NewGuid().ToString("N")[..6]);
         Directory.CreateDirectory(directory);
         return directory;
     }
