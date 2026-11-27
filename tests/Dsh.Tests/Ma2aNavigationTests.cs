@@ -25,6 +25,9 @@ public sealed class Ma2aNavigationTests
             var originalClient = workspace.Fleet.Client;
             try
             {
+                var error = Assert.Throws<ArgumentException>("id", () => viewModel.Workbench.RegisterPage(
+                    WorkspacePages.Machines, "Replacement", _ => new TextBlock { Text = "Replacement page" }));
+                Assert.Contains(WorkspacePages.Machines, error.Message);
                 window.Show();
                 Render(window);
                 var navigation = window.GetVisualDescendants().OfType<SidebarView>().Single()
@@ -34,12 +37,14 @@ public sealed class Ma2aNavigationTests
                     navigation.Select(button => Assert.IsType<WorkspacePageEntry>(button.CommandParameter).Id));
 
                 var machinesEntry = navigation.Single(button => button.CommandParameter is WorkspacePageEntry { Id: WorkspacePages.Machines });
+                Assert.Equal("机器", Assert.IsType<WorkspacePageEntry>(machinesEntry.CommandParameter).Label);
                 var openMachines = machinesEntry.Command;
                 Assert.NotNull(openMachines);
                 openMachines.Execute(machinesEntry.CommandParameter);
                 Render(window);
                 Assert.Same(machinesEntry.CommandParameter, workspace.ActivePage);
                 var tabs = MachinesTabs(window);
+                Assert.Equal(["机器管理", "跨机协作"], tabs.Items.OfType<TabItem>().Select(tab => Assert.IsType<string>(tab.Header)));
                 var machinesPage = Assert.IsType<MachinesPageViewModel>(tabs.DataContext);
                 Assert.Equal(0, tabs.SelectedIndex);
                 Assert.Same(workspace.Machines, VisibleView<MachinesView>(tabs).DataContext);

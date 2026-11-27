@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Dsh.Boot;
@@ -82,6 +83,51 @@ public sealed class PluginGuiExtensibilityTests
     });
 
     [Fact]
+    public async Task Workbench_CoalescedSlotReloadUsesRegistrationOrder_AndKeepsOtherControls() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+        try
+        {
+            window.Show();
+            var viewModel = window.ViewModel!;
+            viewModel.ShowChatCommand.Execute(null);
+            var workbench = viewModel.Workbench;
+            var neighborBuilds = 0;
+            using var first = workbench.RegisterChatHeaderItem("first", _ => new Button { Content = "first" });
+            using var second = workbench.RegisterChatHeaderItem("second", _ =>
+            {
+                neighborBuilds++;
+                return new Button { Content = "second" };
+            });
+            Render(window);
+            var host = Assert.Single(window.GetVisualDescendants().OfType<ItemsControl>(), control => control.Name == "PluginChatHeaderHost");
+            var neighbor = FindControlByText<Button>(host, "second");
+            Assert.Collection(host.GetVisualDescendants().OfType<Button>(),
+                button => Assert.Equal("first", button.Content),
+                button => Assert.Same(neighbor, button));
+
+            // Hold the dispatcher until both registration changes can be reconciled together.
+            using var reloaded = Task.Run(() =>
+            {
+                first.Dispose();
+                return workbench.RegisterChatHeaderItem("first", _ => new Button { Content = "reloaded" });
+            }).WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken).GetAwaiter().GetResult();
+            Render(window);
+            Assert.Collection(host.GetVisualDescendants().OfType<Button>(),
+                button => Assert.Same(neighbor, button),
+                button => Assert.Equal("reloaded", button.Content));
+            Assert.Equal(1, neighborBuilds);
+        }
+        finally
+        {
+            window.Close();
+            await window.ViewModel!.DisposeAsync();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Fact]
     public async Task Workbench_PageReplacementReleasesTheOldTreeOnce_AndRestoresTheBuiltInPage() => await HeadlessGui.RunAsync(async () =>
     {
         await using var environment = await GuiTestEnvironment.CreateAsync();
@@ -90,15 +136,21 @@ public sealed class PluginGuiExtensibilityTests
         {
             window.Show();
             var workspace = window.ViewModel!.Workspace;
-            var defaults = workspace.Pages.Available.Single(page => page.Id == WorkspacePages.Machines);
+            const string pageId = WorkspacePages.Files;
+            var defaultPage = workspace.Pages.Available.Single(page => page.Id == pageId);
             var probe = new DisposalProbe();
-            var content = new ContentControl { Content = new TextBlock { Text = "plugin content" }, DataContext = probe };
-            var items = new ItemsControl { ItemsSource = new[] { "plugin item" }, DataContext = probe };
+            var emptyResources = new EmptyPluginResources();
+            var themedResources = new ResourceDictionary();
+            themedResources.ThemeDictionaries.Add(ThemeVariant.Default, new ResourceDictionary { ["plugin-theme"] = probe });
+            var content = new ContentControl { Content = new TextBlock { Text = "plugin content" }, DataContext = probe, Resources = emptyResources };
+            var items = new ItemsControl { ItemsSource = new[] { "plugin item" }, DataContext = probe, Resources = themedResources };
             var page = new DisposablePage { Children = { content, items }, DataContext = probe };
+            Assert.False(((IResourceNode)content).HasResources);
+            Assert.False(((IResourceNode)items).HasResources);
 
-            using var first = window.ViewModel.Workbench.RegisterPage(WorkspacePages.Machines, "first", _ => new TextBlock { Text = "first page" });
-            using var replacement = window.ViewModel.Workbench.RegisterPage(WorkspacePages.Machines, "replacement", _ => page);
-            workspace.OpenPage(workspace.Pages.Available.Single(entry => entry.Id == WorkspacePages.Machines));
+            using var first = window.ViewModel.Workbench.RegisterPage(pageId, "first", _ => new TextBlock { Text = "first page" });
+            using var replacement = window.ViewModel.Workbench.RegisterPage(pageId, "replacement", _ => page);
+            workspace.OpenPage(workspace.Pages.Available.Single(entry => entry.Id == pageId));
             Render(window);
             Assert.True(page.IsEffectivelyVisible);
 
@@ -109,13 +161,17 @@ public sealed class PluginGuiExtensibilityTests
             Assert.Empty(page.Children);
             Assert.Null(content.Content);
             Assert.Null(items.ItemsSource);
+            Assert.NotSame(emptyResources, content.Resources);
+            Assert.NotSame(themedResources, items.Resources);
+            Assert.Null(emptyResources.Owner);
+            Assert.Null(themedResources.Owner);
             Assert.Equal("first", workspace.ActivePage?.Label);
 
             first.Dispose();
             Render(window);
-            Assert.Same(defaults, workspace.ActivePage);
-            Assert.Same(defaults, workspace.Pages.Available.Single(entry => entry.Id == WorkspacePages.Machines));
-            Assert.True(Assert.Single(window.GetVisualDescendants().OfType<MachinesView>()).IsEffectivelyVisible);
+            Assert.Same(defaultPage, workspace.ActivePage);
+            Assert.Same(defaultPage, workspace.Pages.Available.Single(entry => entry.Id == pageId));
+            Assert.True(Assert.Single(window.GetVisualDescendants().OfType<HostPageView>()).IsEffectivelyVisible);
             Assert.Equal(1, page.Disposals);
         }
         finally
@@ -125,6 +181,49 @@ public sealed class PluginGuiExtensibilityTests
             Dispatcher.UIThread.RunJobs();
         }
     });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Workbench_ReportsFactoryErrorsAndLetsTheCallerRemoveTheRegistration(bool fromWorker)
+        => await HeadlessGui.RunAsync(async () =>
+        {
+            await using var environment = await GuiTestEnvironment.CreateAsync();
+            var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+            try
+            {
+                window.Show();
+                Render(window);
+                var model = window.ViewModel!;
+                const string slot = "failing-toolbar-item";
+                const string failure = "Toolbar factory failed.";
+                const string neighborId = "working-toolbar-item";
+                var neighbor = new Button();
+                (IDisposable Neighbor, IDisposable Broken) RegisterItems()
+                    => (model.Workbench.RegisterToolbarItem(neighborId, _ => neighbor),
+                        model.Workbench.RegisterToolbarItem(slot, _ => throw new InvalidOperationException(failure)));
+                var registrations = fromWorker
+                    ? Task.Run(RegisterItems).WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken).GetAwaiter().GetResult()
+                    : RegisterItems();
+                using var working = registrations.Neighbor;
+                using var broken = registrations.Broken;
+
+                Render(window);
+                Assert.Contains(model.Toasts, toast => toast.IsError && toast.Message == failure);
+                Assert.Same(neighbor, Assert.Single(model.Workbench.ToolbarItems).Content);
+
+                broken.Dispose();
+                using var replacement = model.Workbench.RegisterToolbarItem(slot, _ => new Button());
+                Assert.IsType<Button>(Assert.Single(model.Workbench.ToolbarItems, item => item.Id == slot).Content);
+                Assert.Same(neighbor, Assert.Single(model.Workbench.ToolbarItems, item => item.Id == neighborId).Content);
+            }
+            finally
+            {
+                window.Close();
+                await window.ViewModel!.DisposeAsync();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
 
     [Fact]
     public async Task Workbench_BackgroundPageReplacementInstallsItsTemplateBeforePublishingContent() => await HeadlessGui.RunAsync(async () =>
@@ -191,6 +290,8 @@ public sealed class PluginGuiExtensibilityTests
     });
 
     private sealed record ReplacementPage(string Text);
+
+    private sealed class EmptyPluginResources : ResourceDictionary;
 
     private sealed class DisposablePage : StackPanel, IDisposable
     {

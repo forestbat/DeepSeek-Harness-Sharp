@@ -35,7 +35,7 @@ public sealed partial class MachinesPageViewModel(MachinesViewModel machines) : 
 
 /**
  * The extension point for workspace pages: entries appear in the navigation once a module registers them, in registration order.
- * The reserved ids name the pages the workspace expects (files and editing, Git, machine management); nothing is shown for an id until it is registered.
+ * The built-in IDs name the default workspace pages for files, Git and machine management.
  */
 public sealed class WorkspacePages
 {

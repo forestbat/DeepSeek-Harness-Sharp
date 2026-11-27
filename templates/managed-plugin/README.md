@@ -87,9 +87,11 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
 ## 自定义局部 GUI（`GuiWorkbench`）
 
+请使用目标版本的 DSharp GUI 和 Avalonia 依赖构建 GUI 插件。升级任一依赖版本后，请重新构建插件。
+
 桌面端 `@deepseek-ai/dsh-gui` 向宿主 `Context` 提供 `GuiWorkbench` 服务（服务名 `"guiWorkbench"`），进程内插件可通过 `InjectTypes => [typeof(GuiWorkbench)]` 注入并向现有窗口贡献局部界面：
 
-- `workbench.RegisterPage(id, label, factory, icon)`：向左侧工作台导航栏添加或原地替换自定义页面（`factory` 可直接返回 Avalonia `Control`，或返回配合 `RegisterDataTemplate` 渲染的视图模型）。
+- `workbench.RegisterPage(id, label, factory, icon)`：向左侧工作台导航栏添加或原地替换自定义页面（`factory` 可直接返回 Avalonia `Control`，或返回配合 `RegisterDataTemplate` 渲染的视图模型）。`machines` 保留给内置「机器」页。
 - `workbench.RegisterToolbarItem(id, factory)`：向主窗口顶栏操作区注册按钮或控件。
 - `workbench.RegisterChatHeaderItem(id, factory)`、`RegisterChatBanner(id, factory)`、`RegisterStatusItem(id, factory)`：向当前会话顶栏、横幅区或底部状态栏注册局部控件。
 - `workbench.RegisterSettingsPanel(id, title, factory)` 与 `RegisterDataTemplate(template)`：向「设置 → 插件与 MCP」挂载自定义配置卡片，或动态注册窗口级数据模板。

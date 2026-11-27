@@ -7,6 +7,7 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Templates;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Dsh.Gui.ViewModels;
@@ -117,10 +118,16 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
 
     public bool HasSettingsPanels => SettingsPanels.Count > 0;
 
-    /** Registers or replaces a navigation page in the workspace sidebar; disposing removes the page. */
+    /**
+     * Registers or replaces a navigation page in the workspace sidebar.
+     * The Machines page ID is reserved for the host.
+     * Dispose the returned handle to remove the registration.
+     */
     public IDisposable RegisterPage(string id, string label, Func<WorkspacePageContext, object> factory, Geometry? icon = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        if (id == WorkspacePages.Machines)
+            throw new ArgumentException($"The workspace page ID '{id}' is reserved for the built-in Machines page.", nameof(id));
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
         ArgumentNullException.ThrowIfNull(factory);
         return Register(_pages, id, new PageRegistration(id, label, icon, factory));
@@ -273,24 +280,29 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
             return;
         if (Dispatcher.UIThread.CheckAccess())
         {
-            ApplyChanges();
+            ApplyChangesAndReportFailure();
             return;
         }
         if (Interlocked.Exchange(ref _refreshScheduled, 1) == 0)
             Dispatcher.UIThread.Post(() =>
             {
                 Interlocked.Exchange(ref _refreshScheduled, 0);
-                try
-                {
-                    ApplyChanges();
-                }
-                catch (Exception error)
-                {
-                    var message = Dsh.Runtime.OutboundProxy.Redact(error.Message);
-                    Trace.TraceError($"Plugin GUI update failed: {message}");
-                    _appliedViewModel?.ShowToast("插件界面更新失败", message, true);
-                }
+                ApplyChangesAndReportFailure();
             });
+    }
+
+    private void ApplyChangesAndReportFailure()
+    {
+        try
+        {
+            ApplyChanges();
+        }
+        catch (Exception error)
+        {
+            var message = Dsh.Runtime.OutboundProxy.Redact(error.Message);
+            Trace.TraceError($"Plugin GUI update failed: {message}");
+            _appliedViewModel?.ShowToast("插件界面更新失败", message, true);
+        }
     }
 
     private void ApplyChanges()
@@ -464,37 +476,53 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
                 return;
             effective = group.Registrations.Snapshot();
         }
-        SyncSlots(group, effective, context, contextChanged);
-        group.Context = context;
-        group.Version = version;
+        var hadItems = group.Items.Count > 0;
+        try
+        {
+            SyncSlots(group, effective, context, contextChanged);
+            group.Context = context;
+            group.Version = version;
+        }
+        finally
+        {
+            if (hadItems != (group.Items.Count > 0))
+                OnPropertyChanged(group.FlagProperty);
+        }
     }
 
     private void SyncSlots<TContext>(SlotGroup<TContext> group, SlotRegistration<TContext>[] desired, TContext context, bool contextChanged)
         where TContext : struct
     {
-        var hadItems = group.Items.Count > 0;
-        var remaining = desired.ToDictionary(registration => registration.Id, StringComparer.Ordinal);
+        var positions = new Dictionary<string, int>(desired.Length, StringComparer.Ordinal);
+        for (var index = 0; index < desired.Length; index++)
+            positions.Add(desired[index].Id, index);
+
+        var ordered = new GuiSlotItem[desired.Length];
         for (var index = group.Items.Count - 1; index >= 0; index--)
         {
             var item = group.Items[index];
-            if (remaining.Remove(item.Id, out var registration))
-                UpdateSlot(item, registration, context, contextChanged);
+            if (positions.Remove(item.Id, out var position))
+            {
+                UpdateSlot(item, desired[position], context, contextChanged);
+                ordered[position] = item;
+            }
             else
             {
                 ReleaseSlot(item);
                 group.Items.RemoveAt(index);
             }
         }
-        foreach (var registration in desired)
+        for (var index = 0; index < desired.Length; index++)
         {
-            if (!remaining.ContainsKey(registration.Id))
+            if (ordered[index] is not null)
                 continue;
+            var registration = desired[index];
             var item = new GuiSlotItem(registration.Id, registration.Title);
             UpdateSlot(item, registration, context, contextChanged: true);
             group.Items.Add(item);
+            ordered[index] = item;
         }
-        if (hadItems != (group.Items.Count > 0))
-            OnPropertyChanged(group.FlagProperty);
+        CollectionSync.Sync(group.Items, ordered);
     }
 
     private static void UpdateSlot<TContext>(GuiSlotItem item, SlotRegistration<TContext> registration, TContext context, bool contextChanged)
@@ -592,7 +620,9 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
     private static void DetachNodeReferences(StyledElement node)
     {
         node.DataContext = null;
-        node.Styles.Clear();
+        if (((IStyleHost)node).IsStylesInitialized)
+            node.Styles.Clear();
+        // An empty custom or theme-only resource dictionary can still retain plugin objects.
         node.Resources = new ResourceDictionary();
         if (node is not Control control)
             return;

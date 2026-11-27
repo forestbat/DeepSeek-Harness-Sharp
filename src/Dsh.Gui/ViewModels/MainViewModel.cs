@@ -119,6 +119,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _pluginCoordinator = new GuiPluginCoordinator(_ctx, chat);
         var workbench = _ctx.Get<GuiWorkbench>(GuiWorkbench.ServiceName, false);
         _ownsWorkbench = workbench is null;
+        if (_ownsWorkbench)
+            _ctx.LoggerFor("gui").Warn("GuiWorkbench service is missing. This window is using its own workbench, so plugin UI registrations will not appear here.");
         Workbench = workbench ?? new GuiWorkbench();
         Home = app.Home;
         Subagents = new SubagentPanelViewModel(chat);
