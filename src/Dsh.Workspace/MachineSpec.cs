@@ -13,6 +13,9 @@ public static class MachineKinds
 
     /** A remote SSH service reached by its persistent iroh endpoint identity. */
     public const string Iroh = "iroh";
+
+    /** A local WSL distribution on Windows, reached through `wsl.exe -d <distro> --exec /bin/sh -c ...`. */
+    public const string Wsl = "wsl";
 }
 
 /** SSH authentication modes. */
@@ -25,7 +28,7 @@ public static class SshAuth
 
 /**
  * One machine of the fleet.
- * Local machines use only Name and HarnessHome; SSH machines use the connection fields as well.
+ * Local machines use only Name and HarnessHome; WSL machines select a distro and optional Linux user/paths; SSH machines use the connection fields as well.
  * HarnessHome is the harness home the host runs under (DSH_HOME); empty means the default resolution on that machine (DSH_HOME or ~/.dsh, following .storage-root).
  * RemotePath is the remote directory that holds ./dsharp and is the default working directory of new remote sessions.
  * SshOptions are extra `-o Key=Value` options placed before the built-in ones, so they take precedence (ssh keeps the first value it sees).
@@ -47,7 +50,8 @@ public sealed record MachineSpec(
     IReadOnlyList<string>? RelayUrls = null,
     OutboundTunnelSpec? OutboundTunnel = null,
     string? IrohExecutablePath = null,
-    string? IrohArguments = null)
+    string? IrohArguments = null,
+    string? WslDistro = null)
 {
     public const int DefaultSshPort = 22;
     public const int IrohEndpointIdLength = 64;
@@ -61,10 +65,23 @@ public sealed record MachineSpec(
     public static MachineSpec Ssh(string name, string host, int port, string user, string auth)
         => new(name, MachineKinds.Ssh, host, port, user, auth);
 
+    public static MachineSpec Wsl(string name, string? distro = null, string? user = null, string? remotePath = null, string? harnessHome = null)
+        => new(name, MachineKinds.Wsl, User: user ?? "", RemotePath: remotePath, HarnessHome: harnessHome, WslDistro: distro);
+
     /** Validates persisted transport data independently of optional implementations and installed commands. */
     public void ValidateTransportSettings()
     {
         ValidateRelayUrls(RelayUrls ?? []);
+        if (IsWsl)
+        {
+            if (WslDistro is { Length: > 0 } distro && distro.IndexOfAny(['\r', '\n', '\0']) >= 0)
+                throw new InvalidOperationException("WSL distribution name must be a single line");
+            if (User is { Length: > 0 } user && (user.Any(char.IsWhiteSpace) || user.Contains('\0')))
+                throw new InvalidOperationException("WSL user must not contain whitespace");
+            if (RemotePath is { Length: > 0 } remotePath && LooksLikeWindowsPath(remotePath))
+                throw new InvalidOperationException("WSL remotePath must be a Linux path inside the distribution (e.g. ~/repos or /home/user/repos), not a Windows path");
+            return;
+        }
         if (!IsIroh)
             return;
         if (EndpointId is not { Length: IrohEndpointIdLength } endpoint || endpoint.Any(character => !char.IsAsciiHexDigit(character)))
@@ -98,6 +115,10 @@ public sealed record MachineSpec(
             || name.Equals("ProxyJump", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool LooksLikeWindowsPath(string path)
+        => (path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':')
+            || path.StartsWith(@"\\", StringComparison.Ordinal);
+
     [JsonIgnore]
     public bool IsLocal => Kind == MachineKinds.Local;
 
@@ -105,11 +126,21 @@ public sealed record MachineSpec(
     public bool IsIroh => Kind == MachineKinds.Iroh;
 
     [JsonIgnore]
+    public bool IsWsl => Kind == MachineKinds.Wsl;
+
+    [JsonIgnore]
+    public bool IsSshTransport => Kind is MachineKinds.Ssh or MachineKinds.Iroh;
+
+    [JsonIgnore]
     public string ConnectionHost => IsIroh ? EndpointId ?? "" : Host;
 
-    /** user@host:port for SSH machines, the harness home (or "this computer") for local ones. */
+    /** user@host:port for SSH machines, user@wsl:distro for WSL, the harness home (or "this computer") for local ones. */
     [JsonIgnore]
-    public string Target => IsLocal ? HarnessHome ?? "this computer" : $"{User}@{ConnectionHost}:{Port}";
+    public string Target => IsLocal
+        ? HarnessHome ?? "this computer"
+        : IsWsl
+            ? $"{(User.Length > 0 ? $"{User}@" : "")}wsl:{(string.IsNullOrWhiteSpace(WslDistro) ? "default" : WslDistro)}"
+            : $"{User}@{ConnectionHost}:{Port}";
 }
 
 /** A logical proxy endpoint borrowed through the machine's SSH connection. */

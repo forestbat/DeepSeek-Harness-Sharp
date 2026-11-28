@@ -38,9 +38,21 @@ internal sealed class HostLink(RemoteHostClient client, SshHostLauncher.Connecti
         return new HostLink(connected, null);
     }
 
+    public static async Task<HostLink> OpenRemoteAsync(MachineSpec machine, string? commandPath, FleetOptions options, CancellationToken cancellationToken)
+        => machine.IsWsl
+            ? await OpenWslAsync(machine, commandPath, options, cancellationToken).ConfigureAwait(false)
+            : await OpenSshAsync(machine, commandPath, options, cancellationToken).ConfigureAwait(false);
+
     public static async Task<HostLink> OpenSshAsync(MachineSpec machine, string? commandPath, FleetOptions options, CancellationToken cancellationToken)
     {
         var connection = await SshHostLauncher.ConnectAsync(machine, commandPath, options.ClientName, cancellationToken, options.SshTransportAdapter).ConfigureAwait(false);
+        return new HostLink(connection.Client, connection);
+    }
+
+    private static async Task<HostLink> OpenWslAsync(MachineSpec machine, string? commandPath, FleetOptions options, CancellationToken cancellationToken)
+    {
+        var channel = new WslTransport(machine, options.WslExecutablePath).OpenCommand(SshHostLauncher.HarnessCommand(machine, commandPath));
+        var connection = await SshHostLauncher.ConnectChannelAsync(channel, $"wsl {machine.Target} 失败", options.ClientName, cancellationToken).ConfigureAwait(false);
         return new HostLink(connection.Client, connection);
     }
 

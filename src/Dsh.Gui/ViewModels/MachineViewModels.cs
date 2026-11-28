@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Runtime;
@@ -13,7 +14,7 @@ public sealed partial class MachineRowViewModel(MachineSpec spec, bool isImplici
 
     public string Name => spec.Name;
 
-    public string KindText => spec.IsLocal ? "本机" : spec.IsIroh ? "SSH-over-iroh" : "SSH";
+    public string KindText => spec.IsLocal ? "本机" : spec.IsWsl ? "WSL" : spec.IsIroh ? "SSH-over-iroh" : "SSH";
 
     public string Target => spec.Target;
 
@@ -84,14 +85,25 @@ public sealed class DoctorCheckRow(DoctorCheck check)
 
 /**
  * 新增或编辑一台机器的表单, 覆盖 MachineSpec 的全部字段。
- * 本机条目只用名称与 harness home; 普通 SSH 用主机, SSH-over-iroh 用 Endpoint ID, 两者共用 SSH 认证与远端设置。
+ * 本机条目只用名称与 harness home; WSL 机器选用发行版与可选 Linux 用户/目录; 普通 SSH 用主机, SSH-over-iroh 用 Endpoint ID, 两者共用 SSH 认证与远端设置。
  */
-public sealed partial class MachineEditorViewModel(bool allowIroh = false) : ObservableObject
+public sealed partial class MachineEditorViewModel : ObservableObject
 {
     private const int MaxPort = 65535;
     private OutboundTunnelSpec? _savedOutboundTunnel;
     private string? _savedSshProxy;
     private bool _updatingIrohTarget;
+
+    public MachineEditorViewModel(bool allowIroh = false, bool allowWsl = false)
+    {
+        List<string> kinds = [MachineKinds.Ssh];
+        if (allowIroh)
+            kinds.Add(MachineKinds.Iroh);
+        if (allowWsl)
+            kinds.Add(MachineKinds.Wsl);
+        kinds.Add(MachineKinds.Local);
+        Kinds = kinds;
+    }
 
     public static IReadOnlyList<string> OutboundTunnelModes { get; } = ["proxyCommand", "localForward"];
 
@@ -126,10 +138,9 @@ public sealed partial class MachineEditorViewModel(bool allowIroh = false) : Obs
 
     public static IReadOnlyList<string> AuthModes { get; } = [SshAuth.Agent, SshAuth.Key, SshAuth.Password];
 
-    private static readonly string[] AllKinds = [MachineKinds.Ssh, MachineKinds.Iroh, MachineKinds.Local];
-    private static readonly string[] BasicKinds = [MachineKinds.Ssh, MachineKinds.Local];
+    public IReadOnlyList<string> Kinds { get; }
 
-    public IReadOnlyList<string> Kinds => allowIroh ? AllKinds : BasicKinds;
+    public ObservableCollection<string> WslDistros { get; } = [];
 
     /** 编辑已有机器时的原名称(改名保存时替换原记录); 新增时为 null。 */
     public string? OriginalName { get; init; }
@@ -140,8 +151,14 @@ public sealed partial class MachineEditorViewModel(bool allowIroh = false) : Obs
     private string _name = "";
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsSsh), nameof(IsIroh), nameof(IsLocal), nameof(IsRemote))]
+    [NotifyPropertyChangedFor(nameof(IsSsh), nameof(IsIroh), nameof(IsWsl), nameof(IsLocal), nameof(IsRemote), nameof(HasRemotePath))]
     private string _kind = MachineKinds.Ssh;
+
+    [ObservableProperty]
+    private string _wslDistro = "";
+
+    [ObservableProperty]
+    private string? _selectedWslDistro;
 
     [ObservableProperty]
     private string _host = "";
@@ -195,21 +212,37 @@ public sealed partial class MachineEditorViewModel(bool allowIroh = false) : Obs
 
     public bool IsIroh => Kind == MachineKinds.Iroh;
 
+    public bool IsWsl => Kind == MachineKinds.Wsl;
+
     public bool IsLocal => Kind == MachineKinds.Local;
 
     public bool IsRemote => IsSsh || IsIroh;
+
+    public bool HasRemotePath => IsSsh || IsIroh || IsWsl;
 
     public bool IsPassword => Auth == SshAuth.Password;
 
     public bool IsKey => Auth == SshAuth.Key;
 
-    public static MachineEditorViewModel From(MachineSpec spec, bool allowIroh = false, string? irohExecutable = null)
+    internal void SetWslDistros(IReadOnlyList<string> distros)
     {
-        var editor = new MachineEditorViewModel(allowIroh || spec.IsIroh)
+        lock (WslDistros)
+        {
+            WslDistros.Clear();
+            foreach (var distro in distros)
+                WslDistros.Add(distro);
+            SelectedWslDistro = distros.FirstOrDefault(item => string.Equals(item, WslDistro, StringComparison.Ordinal));
+        }
+    }
+
+    public static MachineEditorViewModel From(MachineSpec spec, bool allowIroh = false, string? irohExecutable = null, bool allowWsl = false)
+    {
+        var editor = new MachineEditorViewModel(allowIroh || spec.IsIroh, allowWsl || spec.IsWsl)
         {
             OriginalName = spec.Name,
             Name = spec.Name,
             Kind = spec.Kind,
+            WslDistro = spec.WslDistro ?? "",
             Host = spec.Host,
             EndpointId = spec.EndpointId ?? "",
             RelayUrls = string.Join(Environment.NewLine, spec.RelayUrls ?? []),
@@ -241,6 +274,8 @@ public sealed partial class MachineEditorViewModel(bool allowIroh = false) : Obs
         var name = Name.Trim();
         if (Kind == MachineKinds.Local)
             return MachineSpec.Local(Optional(HarnessHome) ?? throw new ArgumentException("本机条目需要填写 harness home（默认的本机已经隐式存在）"), name);
+        if (Kind == MachineKinds.Wsl)
+            return MachineSpec.Wsl(name, Optional(WslDistro), Optional(User), Optional(RemotePath), Optional(HarnessHome));
         if (string.IsNullOrWhiteSpace(User))
             throw new ArgumentException("远端机器需要填写 SSH 用户");
         if (Kind == MachineKinds.Ssh && string.IsNullOrWhiteSpace(Host))
@@ -311,6 +346,12 @@ public sealed partial class MachineEditorViewModel(bool allowIroh = false) : Obs
     partial void OnEndpointIdChanged(string value) => UpdateIrohTargetFromParts();
 
     partial void OnKindChanged(string value) => UpdateIrohTargetFromParts();
+
+    partial void OnSelectedWslDistroChanged(string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            WslDistro = value;
+    }
 
     partial void OnIrohTargetChanged(string value)
     {

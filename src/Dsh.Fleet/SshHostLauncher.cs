@@ -34,6 +34,15 @@ public static class SshHostLauncher
     public static async Task<Connection> ConnectAsync(MachineSpec machine, string? hostCommandPath, string clientName, CancellationToken cancellationToken, ISshTransportAdapter? adapter = null)
     {
         var channel = new SshTransport(machine, adapter).OpenCommand(HarnessCommand(machine, hostCommandPath));
+        return await ConnectChannelAsync(channel, $"ssh {machine.Target} 失败（认证方式 {machine.Auth}）", clientName, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<Connection> ConnectChannelAsync(
+        SshCommandChannel channel,
+        string failurePrefix,
+        string clientName,
+        CancellationToken cancellationToken)
+    {
         try
         {
             var client = await RemoteHostClient.ConnectAsync(channel.Stream, token: null, clientName, cancellationToken).ConfigureAwait(false);
@@ -44,15 +53,17 @@ public static class SshHostLauncher
         {
             var detail = channel.ErrorOutput;
             if (detail.Length == 0)
+                detail = channel.BannerOutput;
+            if (detail.Length == 0)
                 detail = error.Message;
             channel.Dispose();
             if (error is HostProtocolMismatchException mismatch)
                 throw new HostProtocolMismatchException(mismatch.LocalVersion, mismatch.RemoteVersion, detail);
-            throw new IOException($"ssh {machine.Target} 失败（认证方式 {machine.Auth}）: {detail}", error);
+            throw new IOException($"{failurePrefix}: {detail}", error);
         }
     }
 
-    private static string HarnessCommand(MachineSpec machine, string? hostCommandPath)
+    internal static string HarnessCommand(MachineSpec machine, string? hostCommandPath)
     {
         var environment = RemoteShell.HomeAssignment(machine.HarnessHome);
         if (!string.IsNullOrEmpty(hostCommandPath))

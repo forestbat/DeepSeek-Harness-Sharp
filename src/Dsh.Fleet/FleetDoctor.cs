@@ -23,14 +23,29 @@ public static class FleetDoctor
 
     public static async Task<IReadOnlyList<DoctorCheck>> CheckAsync(MachineSpec machine, FleetOptions options, CancellationToken cancellationToken, IRemoteMachineTransport? transport = null)
     {
-        transport ??= new SshTransport(machine, options.SshTransportAdapter);
         List<DoctorCheck> checks = [];
         if (!machine.IsLocal)
         {
-            var reach = await CheckSshAsync(machine, transport, cancellationToken).ConfigureAwait(false);
+            DoctorCheck reach;
+            try
+            {
+                transport ??= WslTransport.Create(machine, options);
+                reach = machine.IsWsl
+                    ? await CheckWslAsync(machine, transport, cancellationToken).ConfigureAwait(false)
+                    : await CheckSshAsync(machine, transport, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is NotSupportedException or FileNotFoundException or InvalidOperationException or System.ComponentModel.Win32Exception or IOException or TimeoutException)
+            {
+                checks.Add(new DoctorCheck(machine.IsWsl ? "wsl" : "ssh", DoctorOutcome.Failed, error.Message));
+                return checks;
+            }
             checks.Add(reach);
             if (reach.Outcome == DoctorOutcome.Failed)
                 return checks;
+        }
+        else
+        {
+            transport ??= new SshTransport(machine, options.SshTransportAdapter);
         }
 
         var commandPath = await InstallationAsync(machine, transport, checks, cancellationToken).ConfigureAwait(false);
@@ -44,17 +59,42 @@ public static class FleetDoctor
         return checks;
     }
 
-    public static async Task<DoctorCheck> CheckSshAsync(MachineSpec machine, IRemoteMachineTransport transport, CancellationToken cancellationToken)
+    public static Task<DoctorCheck> CheckWslAsync(MachineSpec machine, IRemoteMachineTransport transport, CancellationToken cancellationToken)
+        => CheckReachabilityAsync(
+            "wsl",
+            $"{machine.Target} responds normally",
+            _ => transport.CommandLine("true"),
+            transport,
+            machine,
+            cancellationToken);
+
+    public static Task<DoctorCheck> CheckSshAsync(MachineSpec machine, IRemoteMachineTransport transport, CancellationToken cancellationToken)
+        => CheckReachabilityAsync(
+            "ssh",
+            $"{machine.Target} accepts the connection ({machine.Auth})",
+            target => !target.IsIroh && target.Auth == SshAuth.Key && target.KeyPath is { Length: > 0 } key
+                ? $"ssh-copy-id -p {target.Port} -i {RemoteShell.Quote($"{key}.pub")} {target.User}@{target.Host}"
+                : transport.CommandLine("true"),
+            transport,
+            machine,
+            cancellationToken);
+
+    private static async Task<DoctorCheck> CheckReachabilityAsync(
+        string name,
+        string okDetail,
+        Func<MachineSpec, string> buildFix,
+        IRemoteMachineTransport transport,
+        MachineSpec machine,
+        CancellationToken cancellationToken)
     {
         var result = await transport.CaptureAsync("true", cancellationToken).ConfigureAwait(false);
         if (!result.TransportFailed && result.ExitCode == 0)
-            return new DoctorCheck("ssh", DoctorOutcome.Ok, $"{machine.Target} accepts the connection ({machine.Auth})");
-        var fix = !machine.IsIroh && machine.Auth == SshAuth.Key && machine.KeyPath is { Length: > 0 } key
-            ? $"ssh-copy-id -p {machine.Port} -i {RemoteShell.Quote($"{key}.pub")} {machine.User}@{machine.Host}"
-            : transport.CommandLine("true");
-        return new DoctorCheck("ssh", DoctorOutcome.Failed,
+            return new DoctorCheck(name, DoctorOutcome.Ok, okDetail);
+        return new DoctorCheck(
+            name,
+            DoctorOutcome.Failed,
             OutboundProxy.Redact(result.FailureDetail, machine.Password, machine.Proxy),
-            OutboundProxy.Redact(fix, machine.Password, machine.Proxy));
+            OutboundProxy.Redact(buildFix(machine), machine.Password, machine.Proxy));
     }
 
     /** Adds the platform and dsharp checks; returns the dsharp the machine would run, or null when there is none or the platform is unsupported. */
@@ -120,7 +160,9 @@ public static class FleetDoctor
             return new DoctorCheck("host", DoctorOutcome.Ok, $"listening on {socket}");
         var detail = machine.IsLocal
             ? $"no host is listening on {socket}"
-            : $"no host is listening on {socket}; ssh connections start one on demand";
+            : machine.IsWsl
+                ? $"no host is listening on {socket}; wsl connections start one on demand"
+                : $"no host is listening on {socket}; ssh connections start one on demand";
         return new DoctorCheck("host", DoctorOutcome.Warning, detail, Fix(machine, transport, $"{DsharpCommand(machine, commandPath)} host serve"));
     }
 
@@ -155,7 +197,7 @@ public static class FleetDoctor
         {
             await using var link = machine.IsLocal
                 ? await HostLink.OpenLocalAsync(machine, options with { StartLocalHost = null }, cancellationToken).ConfigureAwait(false)
-                : await HostLink.OpenSshAsync(machine, commandPath, options, cancellationToken).ConfigureAwait(false);
+                : await HostLink.OpenRemoteAsync(machine, commandPath, options, cancellationToken).ConfigureAwait(false);
             var clock = Stopwatch.StartNew();
             await link.Client.PingAsync(cancellationToken).ConfigureAwait(false);
             var info = await link.Client.InfoAsync(cancellationToken).ConfigureAwait(false);

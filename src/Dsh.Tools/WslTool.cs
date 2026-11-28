@@ -9,10 +9,7 @@ public static class WslTool
     public const string ToolName = "wsl";
 
     private const string DistroParameter = "distro";
-    private const string ExecutableName = "wsl.exe";
     private const string ForwardedVariablesName = "WSLENV";
-    private const string Utf8MessagesName = "WSL_UTF8";
-    private const string Enabled = "1";
 
     private const string SectionText =
         "Check the [exit code: N] marker on every wsl result; a non-zero code that comes with a wsl.exe message means WSL or the distribution is unavailable, not that the command itself failed.";
@@ -55,8 +52,8 @@ public static class WslTool
         string[] target = DistroOf(args) is { } distro ? ["-d", distro] : [];
         var env = new Dictionary<string, string?>(BashTool.MergeEnv(envs));
         env[ForwardedVariablesName] = ForwardedNames(env);
-        env[Utf8MessagesName] = Enabled;
-        return new ShellLaunch([WslExecutable(), .. target, "--exec", "bash", "-lc", command], env);
+        env[WslExecutable.Utf8MessagesName] = WslExecutable.Enabled;
+        return new ShellLaunch([WslExecutable.Require(guidanceSuffix: ", or use the bash/pwsh tools instead"), .. target, "--exec", "bash", "-lc", command], env);
     }
 
     private static string? DistroOf(JsonElement args)
@@ -77,14 +74,5 @@ public static class WslTool
             .. env.Where(entry => entry.Value is not null && entry.Key != ForwardedVariablesName).Select(entry => entry.Key),
         ];
         return string.Join(':', names.Where(name => !string.IsNullOrEmpty(name)));
-    }
-
-    /** wsl.exe lives in System32 whenever WSL is available at all, including the inbox stub that only offers to install it. */
-    private static string WslExecutable()
-    {
-        var path = Path.Combine(Environment.SystemDirectory, ExecutableName);
-        return File.Exists(path)
-            ? path
-            : throw new InvalidOperationException($"WSL is not installed ({path} not found); install it with `wsl.exe --install` from an elevated prompt, or use the bash/pwsh tools instead");
     }
 }

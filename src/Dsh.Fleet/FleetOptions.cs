@@ -28,6 +28,8 @@ public sealed record FleetOptions
 
     public ISshTransportAdapter? SshTransportAdapter { get; init; }
 
+    public string? WslExecutablePath { get; init; }
+
     public bool AutoReconnect { get; init; } = true;
 
     public TimeSpan InitialBackoff { get; init; } = DefaultInitialBackoff;

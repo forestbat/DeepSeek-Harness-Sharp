@@ -339,6 +339,8 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
 
     public bool IsDraftingIroh => IsDrafting && DraftKind == MachineKinds.Iroh;
 
+    public bool IsDraftingWsl => IsDrafting && DraftKind == MachineKinds.Wsl;
+
     public bool IsDraftingLocal => IsDrafting && DraftKind == MachineKinds.Local;
 
     public Func<Task<string?>>? IrohFilePicker { get; set; }
@@ -351,6 +353,10 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
     [NotifyCanExecuteChangedFor(nameof(NewIrohCommand), nameof(EnableIrohCommand))]
     private bool _irohAvailable;
 
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NewWslCommand), nameof(RefreshWslDistrosCommand))]
+    private bool _wslAvailable;
+
     /** 部署时无论远端版本都重新部署。 */
     [ObservableProperty]
     private bool _forceDeploy;
@@ -362,6 +368,7 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
     {
         var config = store.Load();
         IrohAvailable = administration.IrohAvailable;
+        WslAvailable = administration.WslAvailable;
         Deploy ??= DeploySettingsEditorViewModel.From(config.Deploy);
         var known = Machines.ToDictionary(row => row.Name, StringComparer.Ordinal);
         Machines.Clear();
@@ -407,9 +414,11 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
         RemoteOutboundRequiresRefresh = false;
         RemoteOutboundStatus = "";
         if (value is not null)
-            Editor = value.IsImplicit ? null : MachineEditorViewModel.From(value.Spec, IrohAvailable, IrohExecutable);
+            Editor = value.IsImplicit ? null : MachineEditorViewModel.From(value.Spec, IrohAvailable, IrohExecutable, WslAvailable);
         else
             Editor = null;
+        if (value is not null && !value.IsImplicit && value.Spec.IsWsl && WslAvailable)
+            _ = RefreshWslDistrosAsync();
         RefreshFromFleet();
     }
 
@@ -419,8 +428,49 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
     [RelayCommand(CanExecute = nameof(IrohAvailable))]
     private void NewIroh() => StartNew(MachineKinds.Iroh);
 
+    [RelayCommand(CanExecute = nameof(WslAvailable))]
+    private void NewWsl() => StartNew(MachineKinds.Wsl);
+
     [RelayCommand]
     private void NewLocal() => StartNew(MachineKinds.Local);
+
+    [RelayCommand(CanExecute = nameof(WslAvailable))]
+    private async Task RefreshWslDistrosAsync()
+    {
+        var current = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _wslRefresh, current);
+        previous?.Cancel();
+        var editor = Editor;
+        try
+        {
+            var distros = await administration.ListWslDistrosAsync(current.Token);
+            if (current.IsCancellationRequested)
+                return;
+            OnUi(() =>
+            {
+                if (!current.IsCancellationRequested && ReferenceEquals(Editor, editor))
+                    editor?.SetWslDistros(distros);
+            });
+        }
+        catch (OperationCanceledException) when (current.IsCancellationRequested)
+        {
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or Win32Exception)
+        {
+            OnUi(() =>
+            {
+                if (!current.IsCancellationRequested)
+                    Report(error.Message, isError: true);
+            });
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _wslRefresh, null, current);
+            current.Dispose();
+        }
+    }
+
+    private CancellationTokenSource? _wslRefresh;
 
     [RelayCommand]
     private Task SaveAsync() => RunAsync(() =>
@@ -519,12 +569,19 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
         Selected = null;
         IsDrafting = true;
         DraftKind = kind;
-        DraftLabel = kind == MachineKinds.Local ? "正在新增本地 Harness Host" : "正在新增机器";
-        Editor = new MachineEditorViewModel(IrohAvailable)
+        DraftLabel = kind switch
+        {
+            MachineKinds.Local => "正在新增本地 Harness Host",
+            MachineKinds.Wsl => "正在新增 WSL 机器",
+            _ => "正在新增机器",
+        };
+        Editor = new MachineEditorViewModel(IrohAvailable, WslAvailable)
         {
             Kind = kind,
             IrohExecutablePath = kind == MachineKinds.Iroh ? IrohExecutable ?? "" : "",
         };
+        if (kind == MachineKinds.Wsl && WslAvailable)
+            _ = RefreshWslDistrosAsync();
     }
 
     [RelayCommand]
@@ -545,6 +602,7 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
     {
         OnPropertyChanged(nameof(IsDraftingSsh));
         OnPropertyChanged(nameof(IsDraftingIroh));
+        OnPropertyChanged(nameof(IsDraftingWsl));
         OnPropertyChanged(nameof(IsDraftingLocal));
     }
 
@@ -555,8 +613,11 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
     {
         var config = store.Load();
         IrohAvailable = administration.IrohAvailable;
+        WslAvailable = administration.WslAvailable;
         if (spec.IsIroh && !IrohAvailable && !config.Machines.Any(machine => machine.Name == originalName && machine.IsIroh))
             throw new InvalidOperationException("Iroh requires an installed iroh-ssh command available to this application.");
+        if (spec.IsWsl && !WslAvailable && !config.Machines.Any(machine => machine.Name == originalName && machine.IsWsl))
+            throw new InvalidOperationException("WSL machines require Windows with wsl.exe available.");
         if (spec.Name != originalName && config.Machines.Any(machine => machine.Name == spec.Name))
             throw new InvalidOperationException($"已有名为 {spec.Name} 的机器");
         var replaced = originalName is not null && config.Machines.Any(machine => machine.Name == originalName);

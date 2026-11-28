@@ -24,10 +24,10 @@ internal static class FleetCli
     /** The shell convention for a command stopped by Ctrl+C (128 + SIGINT). */
     private const int InterruptedExitCode = 130;
 
-    private static readonly HashSet<string> Flags = ["--local", "--force", "--password-stdin"];
+    private static readonly HashSet<string> Flags = ["--local", "--wsl", "--force", "--password-stdin"];
 
     private static readonly HashSet<string> ValueOptions =
-        ["--host", "--port", "--user", "--auth", "--key", "--proxy", "--remote-path", "--remote-home", "--ssh-option", "--home", "--machine", "--proxy-layer", "--endpoint-id", "--relay-url", "--ssh-port", "--activation"];
+        ["--host", "--port", "--user", "--auth", "--key", "--proxy", "--remote-path", "--remote-home", "--ssh-option", "--home", "--distro", "--machine", "--proxy-layer", "--endpoint-id", "--relay-url", "--ssh-port", "--activation"];
 
     private static readonly FleetTunnelJsonContext TunnelJson = new(new JsonSerializerOptions
     {
@@ -82,6 +82,7 @@ internal static class FleetCli
                dsharp machine add <name> --host <h> [--port N] [--user U] [--auth agent|key|password] [--key <path>] [--proxy <cmd>]
                                          [--remote-path <dir>] [--remote-home <dir>] [--ssh-option <o>]... [--password-stdin]
                dsharp machine add <name> --local --home <harness home>
+               dsharp machine add <name> --wsl [--distro <distro>] [--user <user>] [--remote-path <dir>] [--remote-home <dir>]
                dsharp machine add <name> --endpoint-id <id> [--relay-url <url>]... [SSH authentication options]
                dsharp machine enable-iroh <name> [--relay-url <url>]...   (install over existing SSH, verify, then switch)
                dsharp machine remove <name>
@@ -131,7 +132,7 @@ internal static class FleetCli
     private static async Task<int> ListMachinesAsync(FleetCliContext context)
     {
         var rows = context.Store.Load().AllMachines()
-            .Select(machine => new[] { machine.Name, machine.Kind, machine.Target, machine.IsLocal ? "-" : machine.Auth, machine.HarnessHome ?? "(default)" })
+            .Select(machine => new[] { machine.Name, machine.Kind, machine.Target, machine.IsLocal || machine.IsWsl ? "-" : machine.Auth, machine.HarnessHome ?? "(default)" })
             .ToList();
         await WriteTableAsync(["NAME", "KIND", "TARGET", "AUTH", "HARNESS HOME"], rows);
         return 0;
@@ -144,9 +145,17 @@ internal static class FleetCli
             return await FailAsync("machine add requires a name");
         if (arguments.Has("--local") && arguments.Value("--endpoint-id") is not null)
             throw new InvalidOperationException("--local and --endpoint-id cannot be combined");
+        if (arguments.Has("--wsl"))
+        {
+            string[] incompatible = ["--local", "--host", "--endpoint-id", "--auth", "--key", "--proxy", "--port", "--ssh-option", "--password-stdin", "--relay-url"];
+            if (incompatible.FirstOrDefault(flag => arguments.Has(flag) || arguments.Value(flag) is not null) is { } conflict)
+                throw new InvalidOperationException($"--wsl cannot be combined with {conflict}");
+        }
         var machine = arguments.Has("--local")
             ? MachineSpec.Local(arguments.Value("--home") is { } home ? Path.GetFullPath(home) : throw new InvalidOperationException("machine add --local requires --home <harness home>"), name)
-            : await SshMachineAsync(name, arguments);
+            : arguments.Has("--wsl")
+                ? MachineSpec.Wsl(name, arguments.Value("--distro"), arguments.Value("--user"), arguments.Value("--remote-path"), arguments.Value("--remote-home"))
+                : await SshMachineAsync(name, arguments);
         context.Store.Upsert(machine);
         await Console.Out.WriteLineAsync($"saved {machine.Name} ({machine.Target}) to {context.Store.FilePath}");
         return 0;
@@ -301,6 +310,8 @@ internal static class FleetCli
             saved = machine.OutboundTunnel;
             if (machine.IsLocal)
                 return await FailAsync("outbound tunnels are not available for local machines");
+            if (!machine.IsSshTransport)
+                return await FailAsync("outbound tunnels require an SSH or iroh machine");
             if (operation == "set")
             {
                 try
@@ -394,7 +405,8 @@ internal static class FleetCli
         if (machine.IsLocal)
             return await FailAsync($"{machine.Name} is this computer; it runs this dsharp and needs no deployment");
         var deploy = context.Store.Load().Deploy;
-        var result = await new RemoteDsharpInstaller(new SshTransport(machine, context.SshTransportAdapter), context.SshTransportAdapter).EnsureAsync(
+        var options = context.Options(deploy: true, startLocalHost: false);
+        var result = await WslTransport.CreateInstaller(machine, options).EnsureAsync(
             deploy, step => Console.Error.WriteLine(step), context.Cancellation, force: context.Arguments.Has("--force"),
             localHome: context.Home);
         await Console.Out.WriteLineAsync(result.AlreadyPresent
