@@ -1,3 +1,4 @@
+using Dsh.Core;
 using Dsh.Ide;
 
 namespace Dsh.RemoteHost;
@@ -19,6 +20,53 @@ public interface IRemoteHostBackend
     IRemotePluginsBackend? Plugins { get; }
     IRemoteNetworkBackend? Network { get; }
     IRemoteEditorBackend? Editor => null;
+    IRemoteMeshBackend? Mesh => null;
+}
+
+public sealed record HostMeshCaller(
+    string ConnectionId,
+    string PrincipalId,
+    string? ClientName,
+    RoomRole Role);
+
+public sealed record HostConnectionIdentity(
+    string PrincipalId,
+    RoomRole Role,
+    RoomId? RoomId = null,
+    bool AllowCollaboratorApprovals = false);
+
+public interface IRemoteMeshBackend
+{
+    bool SupportsMesh { get; }
+    bool SupportsRooms { get; }
+    bool SupportsDiscovery { get; }
+    bool SupportsChannels { get; }
+
+    Task<HostConnectionIdentity?> ResolveInviteAsync(string inviteToken, string? principalId, string? displayName, CancellationToken cancellationToken);
+    Task<HostSubscription> SubscribeAsync(CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken);
+    Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<AgentProfile> WakeAgentAsync(string agentId, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<bool> SuspendAgentAsync(string agentId, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<IReadOnlyList<RemoteExecutionTarget>> ListTargetsAsync(CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken);
+    Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<RoomInvite> CreateInviteAsync(RemoteRoomInviteRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<CollaborationRoom> JoinRoomAsync(RemoteRoomJoinRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<RoomMessage> PostRoomMessageAsync(RemoteRoomPostRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request, CancellationToken cancellationToken);
+    Task<AgentTrustRecord> GrantTrustAsync(RemoteTrustGrantRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<AgentTrustRecord> RevokeTrustAsync(RemoteTrustRevokeRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AgentTrustRecord>> ListTrustAsync(CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<ChannelBinding>> ListChannelsAsync(CancellationToken cancellationToken);
+    Task<ChannelBinding> BindChannelAsync(ChannelBinding request, HostMeshCaller caller, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AutomationTriggerRule>> ListTriggersAsync(CancellationToken cancellationToken);
 }
 
 /** Required session execution and event stream. Subscribe installs its live listener before returning. */

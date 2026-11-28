@@ -122,6 +122,9 @@
                 </TabItem>
               </TabControl>
             </DataTemplate>
+            <DataTemplate DataType="vm:AgentMeshViewModel">
+              <views:AgentMeshView />
+            </DataTemplate>
           </ContentControl.DataTemplates>
         </ContentControl>
         <views:ChatView Grid.Row="1" IsVisible="{Binding IsChatPage}" />

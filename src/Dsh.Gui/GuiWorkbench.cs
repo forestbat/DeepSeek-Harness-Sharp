@@ -11,6 +11,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Dsh.Gui.ViewModels;
+using Dsh.Workspace;
 
 namespace Dsh.Gui;
 
@@ -117,6 +118,16 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
     public bool HasStatusItems => StatusItems.Count > 0;
 
     public bool HasSettingsPanels => SettingsPanels.Count > 0;
+
+    /** Active workspace client for external GUI plugins consuming 0.5.0 host and mesh capabilities. */
+    public IWorkspaceClient? Workspace => TryGetWorkspace();
+
+    /** Returns the active workspace client when a MainWindow is attached, otherwise null. */
+    public IWorkspaceClient? TryGetWorkspace()
+    {
+        lock (_gate)
+            return _viewModel?.Workspace.Fleet.Client;
+    }
 
     /**
      * Registers or replaces a navigation page in the workspace sidebar.
@@ -381,6 +392,7 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         _evictedPageId = null;
         if (viewModel is not null)
             viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        OnPropertyChanged(nameof(Workspace));
     }
 
     private void ApplyTemplates(Window? window, TemplateRegistration[] templates)

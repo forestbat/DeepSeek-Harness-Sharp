@@ -1,0 +1,314 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:core="using:Dsh.Core"
+             xmlns:vm="using:Dsh.Gui.ViewModels"
+             x:Class="Dsh.Gui.Views.AgentMeshView"
+             x:DataType="vm:AgentMeshViewModel"
+             x:CompileBindings="True"
+             FontFamily="{DynamicResource Font.Ui}"
+             FontSize="{DynamicResource FontSize.Body}">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.TrustBadge">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Status.Warning}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.TrustBadge.trusted">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Status.Success}" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10" Margin="16">
+    <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+      <TextBlock Classes="Title" Text="智能体网络" VerticalAlignment="Center" />
+      <ComboBox Grid.Column="1" MinWidth="150" ItemsSource="{Binding MachineNames}" SelectedItem="{Binding SelectedMachine, Mode=TwoWay}"
+                AutomationProperties.Name="目标机器" />
+      <TextBlock Grid.Column="2" Text="{Binding Status}" Classes="Secondary" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                 AutomationProperties.LiveSetting="Polite" />
+      <Button Grid.Column="3" Classes="Primary" Content="刷新" Command="{Binding RefreshCommand}" IsEnabled="{Binding !IsBusy}" />
+    </Grid>
+
+    <Border Grid.Row="1" Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="{DynamicResource CornerRadius.Control}" Padding="8,6">
+      <StackPanel Orientation="Horizontal" Spacing="16">
+        <TextBlock Classes="Tertiary" Text="{Binding Agents.Count, StringFormat='Agents: {0}'}" />
+        <TextBlock Classes="Tertiary" Text="{Binding Targets.Count, StringFormat='Targets: {0}'}" />
+        <TextBlock Classes="Tertiary" Text="{Binding Rooms.Count, StringFormat='Rooms: {0}'}" />
+        <TextBlock Classes="Tertiary" Text="{Binding DiscoveredAgents.Count, StringFormat='Discovered: {0}'}" />
+        <TextBlock Classes="Tertiary" Text="{Binding Channels.Count, StringFormat='Channels: {0}'}" />
+      </StackPanel>
+    </Border>
+
+    <TabControl Grid.Row="2" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
+      <TabItem Header="Agents">
+        <Grid ColumnDefinitions="320,8,*" Margin="0,12,0,0">
+          <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+            <TextBlock Text="持久化智能体" FontWeight="SemiBold" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding Agents}" SelectedItem="{Binding SelectedAgent, Mode=TwoWay}"
+                     Background="{DynamicResource Brush.Bg.Inset}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="core:AgentProfile">
+                  <StackPanel Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                      <TextBlock Classes="Secondary" Text="{Binding State}" />
+                      <TextBlock Classes="Tertiary" Text="{Binding BackendKind}" />
+                    </StackPanel>
+                    <TextBlock Classes="Tertiary Mono" Text="{Binding AgentId.Value}" TextTrimming="CharacterEllipsis" />
+                    <WrapPanel ItemSpacing="6" LineSpacing="4" Margin="0,4,0,0">
+                      <Button Classes="Ghost" Content="唤醒"
+                              Command="{Binding $parent[UserControl].((vm:AgentMeshViewModel)DataContext).WakeAgentCommand}"
+                              CommandParameter="{Binding}" />
+                      <Button Classes="Ghost" Content="休眠"
+                              Command="{Binding $parent[UserControl].((vm:AgentMeshViewModel)DataContext).SuspendAgentCommand}"
+                              CommandParameter="{Binding}" />
+                    </WrapPanel>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <StackPanel Grid.Row="2" Spacing="6">
+              <TextBlock Text="注册新智能体" Classes="Secondary" />
+              <TextBox Text="{Binding NewAgentName, Mode=TwoWay}" PlaceholderText="名称" AutomationProperties.Name="新智能体名称" />
+              <TextBox Text="{Binding NewAgentDescription, Mode=TwoWay}" PlaceholderText="描述（可选）" />
+              <ComboBox ItemsSource="{Binding BackendKinds}" SelectedItem="{Binding NewAgentBackendKind, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+              <Button Classes="Primary" Content="创建智能体" Command="{Binding CreateAgentCommand}" IsEnabled="{Binding !IsBusy}" />
+            </StackPanel>
+          </Grid>
+
+          <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+
+          <ScrollViewer Grid.Column="2">
+            <StackPanel Spacing="12" Margin="4,0,0,0">
+              <Border Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="{DynamicResource CornerRadius.Control}" Padding="12">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="发送跨智能体消息" FontWeight="SemiBold" />
+                  <ComboBox ItemsSource="{Binding MessageIntents}" SelectedItem="{Binding AgentMessageIntent, Mode=TwoWay}" HorizontalAlignment="Left" />
+                  <TextBox Text="{Binding AgentMessageText, Mode=TwoWay}" AcceptsReturn="True" MinHeight="68"
+                           PlaceholderText="输入任务或通知内容（休眠时自动唤醒并投递）" AutomationProperties.Name="智能体消息内容" />
+                  <WrapPanel ItemSpacing="8">
+                    <Button Classes="Primary" Content="发送" Command="{Binding SendToAgentCommand}" IsEnabled="{Binding !IsBusy}" />
+                    <Button Classes="Ghost" Content="唤醒选中" Command="{Binding WakeAgentCommand}" IsEnabled="{Binding !IsBusy}" />
+                    <Button Classes="Ghost" Content="休眠选中" Command="{Binding SuspendAgentCommand}" IsEnabled="{Binding !IsBusy}" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding LastDeliverySummary}" Classes="Tertiary Mono"
+                             IsVisible="{Binding LastDeliverySummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+              </Border>
+
+              <Border Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="{DynamicResource CornerRadius.Control}" Padding="12">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="可用执行目标 (Execution Targets)" FontWeight="SemiBold" />
+                  <ItemsControl ItemsSource="{Binding Targets}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="core:RemoteExecutionTarget">
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
+                          <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                          <TextBlock Classes="Tertiary" Text="{Binding Kind}" />
+                          <TextBlock Classes="Tertiary Mono" Text="{Binding TargetId}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Rooms">
+        <Grid ColumnDefinitions="320,8,*" Margin="0,12,0,0">
+          <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="8">
+            <TextBlock Text="多人协作房间" FontWeight="SemiBold" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding Rooms}" SelectedItem="{Binding SelectedRoom, Mode=TwoWay}"
+                     Background="{DynamicResource Brush.Bg.Inset}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="core:CollaborationRoom">
+                  <StackPanel Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                      <TextBlock Classes="Tertiary" Text="{Binding Participants.Count, StringFormat='成员 {0}'}" />
+                    </StackPanel>
+                    <TextBlock Classes="Tertiary Mono" Text="{Binding Id.Value}" TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <StackPanel Grid.Row="2" Spacing="6">
+              <TextBox Text="{Binding NewRoomName, Mode=TwoWay}" PlaceholderText="新房间名称" AutomationProperties.Name="新房间名称" />
+              <Button Classes="Primary" Content="创建房间" Command="{Binding CreateRoomCommand}" IsEnabled="{Binding !IsBusy}" />
+            </StackPanel>
+            <StackPanel Grid.Row="3" Spacing="6">
+              <TextBox Text="{Binding JoinToken, Mode=TwoWay}" PlaceholderText="输入邀请令牌加入房间" />
+              <Button Classes="Ghost" Content="加入房间" Command="{Binding JoinRoomCommand}" IsEnabled="{Binding !IsBusy}" />
+            </StackPanel>
+          </Grid>
+
+          <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+
+          <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto" RowSpacing="8" Margin="4,0,0,0">
+            <Border Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="{DynamicResource CornerRadius.Control}" Padding="10">
+              <StackPanel Spacing="6">
+                <TextBlock Text="邀请协作成员" FontWeight="SemiBold" />
+                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                  <ComboBox ItemsSource="{Binding InviteRoles}" SelectedItem="{Binding InviteRole, Mode=TwoWay}" />
+                  <Button Classes="Ghost" Content="生成邀请" Command="{Binding CreateInviteCommand}" IsEnabled="{Binding !IsBusy}" />
+                </WrapPanel>
+                <SelectableTextBlock Text="{Binding LatestInviteToken, StringFormat='最新邀请令牌: {0}'}" Classes="Tertiary Mono"
+                                     IsVisible="{Binding LatestInviteToken, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+            </Border>
+
+            <ListBox Grid.Row="1" ItemsSource="{Binding RoomMessages}" Background="{DynamicResource Brush.Bg.Inset}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="core:RoomMessage">
+                  <StackPanel Spacing="2" Margin="0,2">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding SenderDisplayName}" />
+                      <TextBlock Classes="Tertiary" Text="{Binding SenderKind}" />
+                      <TextBlock Classes="Tertiary Mono" Text="{Binding Seq, StringFormat='#{0}'}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding Body}" TextWrapping="Wrap" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <Grid Grid.Row="2" ColumnDefinitions="*,140,Auto" ColumnSpacing="8">
+              <TextBox Text="{Binding RoomMessageText, Mode=TwoWay}" PlaceholderText="在房间中发言或 @智能体" AutomationProperties.Name="房间消息内容" />
+              <TextBox Grid.Column="1" Text="{Binding RoomTargetAgentId, Mode=TwoWay}" PlaceholderText="目标 AgentId (可选)" />
+              <Button Grid.Column="2" Classes="Primary" Content="发送消息" Command="{Binding PostRoomMessageCommand}" IsEnabled="{Binding !IsBusy}" />
+            </Grid>
+          </Grid>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Discovery &amp; Trust">
+        <Grid ColumnDefinitions="*,8,320" Margin="0,12,0,0">
+          <Grid RowDefinitions="Auto,*" RowSpacing="8">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Text="{Binding DiscoveryQuery, Mode=TwoWay}" PlaceholderText="按名称、能力或端点检索智能体名片…" />
+              <Button Grid.Column="1" Classes="Primary" Content="发现智能体" Command="{Binding DiscoverCommand}" IsEnabled="{Binding !IsBusy}" />
+            </Grid>
+
+            <ListBox Grid.Row="1" ItemsSource="{Binding DiscoveredAgents}" SelectedItem="{Binding SelectedDiscoveredAgent, Mode=TwoWay}"
+                     Background="{DynamicResource Brush.Bg.Inset}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:DiscoveredAgentRowViewModel">
+                  <StackPanel Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                      <TextBlock Classes="TrustBadge" Classes.trusted="{Binding IsTrusted}" Text="{Binding TrustBadge}" />
+                      <TextBlock Classes="Tertiary" Text="{Binding BackendKind}" />
+                    </StackPanel>
+                    <TextBlock Classes="Secondary" Text="{Binding Description}" TextWrapping="Wrap" />
+                    <TextBlock Classes="Tertiary Mono" Text="{Binding Endpoint}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Classes="Tertiary" Text="{Binding CapabilitiesText, StringFormat='能力: {0}'}" TextWrapping="Wrap" />
+                    <WrapPanel ItemSpacing="8">
+                      <Button Classes="Primary" Content="授予信任"
+                              Command="{Binding $parent[UserControl].((vm:AgentMeshViewModel)DataContext).GrantTrustCommand}"
+                              CommandParameter="{Binding}" />
+                      <Button Classes="Ghost" Content="撤销信任"
+                              Command="{Binding $parent[UserControl].((vm:AgentMeshViewModel)DataContext).RevokeTrustCommand}"
+                              CommandParameter="{Binding}" />
+                    </WrapPanel>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+
+          <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+
+          <ScrollViewer Grid.Column="2">
+            <StackPanel Spacing="10" Margin="4,0,0,0">
+              <Border Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="{DynamicResource CornerRadius.Control}" Padding="10">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="信任权限边界" FontWeight="SemiBold" />
+                  <CheckBox Content="允许消息通信 (Messaging)" IsChecked="{Binding AllowMessaging, Mode=TwoWay}" />
+                  <CheckBox Content="允许任务委派 (TaskDelegation)" IsChecked="{Binding AllowTaskDelegation, Mode=TwoWay}" />
+                  <CheckBox Content="允许事件订阅 (EventSubscription)" IsChecked="{Binding AllowEventSubscription, Mode=TwoWay}" />
+                  <CheckBox Content="允许加入房间 (RoomParticipation)" IsChecked="{Binding AllowRoomParticipation, Mode=TwoWay}" />
+                  <CheckBox Content="允许文件访问 (FileAccess)" IsChecked="{Binding AllowFileAccess, Mode=TwoWay}" />
+                  <CheckBox Content="允许工具控制 (ToolControl)" IsChecked="{Binding AllowToolControl, Mode=TwoWay}" />
+                  <WrapPanel ItemSpacing="8">
+                    <Button Classes="Primary" Content="授予选中" Command="{Binding GrantTrustCommand}" IsEnabled="{Binding !IsBusy}" />
+                    <Button Classes="Ghost" Content="撤销选中" Command="{Binding RevokeTrustCommand}" IsEnabled="{Binding !IsBusy}" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+
+              <Border Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="{DynamicResource CornerRadius.Control}" Padding="10">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="信任审计记录" FontWeight="SemiBold" />
+                  <ItemsControl ItemsSource="{Binding TrustRecords}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="core:AgentTrustRecord">
+                        <StackPanel Spacing="2" Margin="0,2">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                            <TextBlock Classes="Secondary" Text="{Binding Status}" />
+                          </StackPanel>
+                          <TextBlock Classes="Tertiary Mono" Text="{Binding UpdatedByPrincipalId, StringFormat='操作人: {0}'}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Channels &amp; Triggers">
+        <Grid ColumnDefinitions="*,8,*" Margin="0,12,0,0">
+          <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+            <TextBlock Text="外部通道绑定" FontWeight="SemiBold" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding Channels}" Background="{DynamicResource Brush.Bg.Inset}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="core:ChannelBinding">
+                  <StackPanel Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding AdapterKind}" />
+                      <TextBlock Classes="Mono" Text="{Binding ChannelKey}" />
+                      <TextBlock Classes="Tertiary" Text="{Binding TargetAgentId.Value, StringFormat='-> {0}'}" />
+                    </StackPanel>
+                    <TextBlock Classes="Tertiary Mono" Text="{Binding BindingId}" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <StackPanel Grid.Row="2" Spacing="6">
+              <TextBlock Text="绑定新外部通道" Classes="Secondary" />
+              <TextBox Text="{Binding ChannelAdapterKind, Mode=TwoWay}" PlaceholderText="适配器类型 (webhook / slack / feishu)" />
+              <TextBox Text="{Binding ChannelKey, Mode=TwoWay}" PlaceholderText="通道标识 (channel key)" />
+              <TextBox Text="{Binding ChannelTargetAgentId, Mode=TwoWay}" PlaceholderText="目标 AgentId" />
+              <TextBox Text="{Binding ChannelOutboundUrl, Mode=TwoWay}" PlaceholderText="回传 Webhook URL (可选)" />
+              <Button Classes="Primary" Content="绑定通道" Command="{Binding BindChannelCommand}" IsEnabled="{Binding !IsBusy}" />
+            </StackPanel>
+          </Grid>
+
+          <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+
+          <Grid Grid.Column="2" RowDefinitions="Auto,*" RowSpacing="8" Margin="4,0,0,0">
+            <TextBlock Text="自动化触发规则" FontWeight="SemiBold" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding Triggers}" Background="{DynamicResource Brush.Bg.Inset}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="core:AutomationTriggerRule">
+                  <StackPanel Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                      <TextBlock Classes="Secondary" Text="{Binding SourceKind}" />
+                      <TextBlock Classes="Tertiary Mono" Text="{Binding EventPattern}" />
+                    </StackPanel>
+                    <TextBlock Classes="Tertiary Mono" Text="{Binding TargetAgentId.Value, StringFormat='目标 Agent: {0}'}" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Grid>
+      </TabItem>
+    </TabControl>
+  </Grid>
+</UserControl>

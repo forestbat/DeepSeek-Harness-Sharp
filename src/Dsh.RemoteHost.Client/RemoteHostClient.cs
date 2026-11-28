@@ -40,6 +40,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         Plugins = new RemotePluginsClient(this, channel.AttachGenerated<IPluginsRpc>());
         Network = new RemoteNetworkClient(this, channel.AttachGenerated<INetworkRpc>());
         Editor = new RemoteEditorClient(this, channel);
+        Mesh = new RemoteMeshClient(this, channel.AttachGenerated<IMeshRpc>());
         _ = ObserveClosedAsync(channel.Completion);
     }
 
@@ -53,9 +54,20 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
     public RemotePluginsClient Plugins { get; }
     public RemoteNetworkClient Network { get; }
     public RemoteEditorClient Editor { get; }
+    public RemoteMeshClient Mesh { get; }
     IWorkspaceAgents IWorkspaceHost.Agent => Agent;
     public T? GetCapability<T>() where T : class
-        => Supports(EditorProtocol.Capability) ? Editor as T : null;
+    {
+        if (typeof(T) == typeof(IWorkspaceMesh) || typeof(T) == typeof(RemoteMeshClient))
+        {
+            var hasMesh = Supports(MeshProtocol.CapabilityMesh)
+                || Supports(MeshProtocol.CapabilityRooms)
+                || Supports(MeshProtocol.CapabilityDiscovery)
+                || Supports(MeshProtocol.CapabilityChannels);
+            return hasMesh ? Mesh as T : null;
+        }
+        return Supports(EditorProtocol.Capability) ? Editor as T : null;
+    }
     IWorkspaceFiles IWorkspaceHost.Files => Files;
     IWorkspaceGit IWorkspaceHost.Git => Git;
     IWorkspaceNotifications IWorkspaceHost.Notifications => Notifications;
@@ -88,11 +100,21 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         => ConnectAsync(duplex, token, clientName: null, cancellationToken);
 
     /** ClientName 是本客户端的显示名(如 "gui@laptop"), host 用它标注由谁回答了审批/问答。 */
-    public static async Task<RemoteHostClient> ConnectAsync(
+    public static Task<RemoteHostClient> ConnectAsync(
         Stream duplex,
         string? token,
         string? clientName,
         CancellationToken cancellationToken)
+        => ConnectAsync(duplex, token, clientName, principalId: null, inviteToken: null, cancellationToken);
+
+    /** Connects to a host, optionally presenting a collaborative principal identity and invite token. */
+    public static async Task<RemoteHostClient> ConnectAsync(
+        Stream duplex,
+        string? token,
+        string? clientName,
+        string? principalId,
+        string? inviteToken,
+        CancellationToken cancellationToken = default)
     {
         RemoteHostClient? client = null;
         var target = new ClientTarget();
@@ -102,7 +124,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         {
             client = new RemoteHostClient(channel);
             target.Client = client;
-            var hello = await client._rpc.HelloAsync(new HostHelloRequest(token, HostProtocol.Version, clientName), cancellationToken).ConfigureAwait(false);
+            var hello = await client._rpc.HelloAsync(new HostHelloRequest(token, HostProtocol.Version, clientName, principalId, inviteToken), cancellationToken).ConfigureAwait(false);
             if (!hello.Ok)
             {
                 if (hello.ProtocolVersion != HostProtocol.Version)
@@ -395,7 +417,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         => _pty.OnOutputAsync(frame);
 
     public Task MeshChangedAsync(RemoteMeshChange change, CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
+        => Mesh.OnChangedAsync(change);
 
     /** 反向调用: host 请本端打开/取消编辑器。 */
     public Task<EditorResult> ClientOpenAsync(RemoteEditorOpen request, CancellationToken cancellationToken = default)
@@ -423,6 +445,7 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
         var failure = error ?? new IOException("host connection closed");
         _pty.OnClosed(failure);
         _notifications.OnClosed(failure);
+        Mesh.OnClosed(failure);
         _ = Editor.DisposeAsync();
         foreach (var stream in _eventStreams.Values)
             stream.Writer.TryComplete(failure);
