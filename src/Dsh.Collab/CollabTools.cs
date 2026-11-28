@@ -176,9 +176,12 @@ public static class CollabTools
                 ["limit"] = new JsonObject { ["type"] = "integer" },
             }),
         Output = ObjectOutput(value => $"Read {value.GetProperty("messages").GetArrayLength()} room message(s)."),
-        Execute = (args, _) =>
+        Execute = (args, exec) =>
         {
             var roomId = RoomId.Create(RequireString(args, "room_id"));
+            var caller = CallerPrincipal(exec);
+            if (!rooms.CanPerform(roomId, caller.Id, RoomActions.Read))
+                throw new UnauthorizedAccessException($"Principal '{caller.Id}' is not permitted to read room '{roomId.Value}'.");
             var afterSeq = LongOr(args, "after_seq") ?? 0;
             var limit = IntOr(args, "limit") ?? 100;
             var messages = rooms.ReadMessages(roomId, afterSeq, limit);

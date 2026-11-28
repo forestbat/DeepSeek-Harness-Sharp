@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.RemoteHost;
@@ -10,8 +12,15 @@ namespace Dsh.Host;
 /** Serves 0.5.0 mesh, collaboration rooms, discovery/trust and external channel ingress over RemoteHost. */
 public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 {
+    private sealed class MeshSubscriber(HostMeshCaller caller, Channel<HostNotification> channel)
+    {
+        public HostMeshCaller Caller { get; } = caller;
+        public Channel<HostNotification> Channel { get; } = channel;
+    }
+
     private readonly Context _ctx;
-    private readonly HostBroadcast _broadcast = new();
+    private readonly Lock _subscribersGate = new();
+    private readonly List<MeshSubscriber> _subscribers = [];
     private readonly Lock _cacheGate = new();
     private readonly IDisposable? _busSubscription;
     private IReadOnlyList<DiscoveredAgentCard> _cachedDiscovered = [];
@@ -52,11 +61,17 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
     {
         if (Rooms is not { } rooms || string.IsNullOrWhiteSpace(inviteToken))
             return null;
-        var effectiveId = string.IsNullOrWhiteSpace(principalId) ? $"remote-{Guid.NewGuid():N}" : principalId;
+        var label = string.IsNullOrWhiteSpace(principalId) ? null : principalId.Trim();
+        var effectiveId = label is null
+            ? $"guest:{Guid.NewGuid():N}"
+            : $"guest:{Guid.NewGuid():N}:{label}";
+        var effectiveDisplayName = !string.IsNullOrWhiteSpace(displayName)
+            ? displayName
+            : label ?? effectiveId;
         var joiner = new MessagePrincipal(
             PrincipalKind.RemoteUser,
             effectiveId,
-            string.IsNullOrWhiteSpace(displayName) ? effectiveId : displayName);
+            effectiveDisplayName);
         try
         {
             var room = await rooms.RedeemInviteAsync(inviteToken, joiner, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -71,17 +86,41 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
         }
     }
 
-    public async Task<HostSubscription> SubscribeAsync(CancellationToken cancellationToken)
+    public async Task<HostSubscription> SubscribeAsync(HostMeshCaller caller, CancellationToken cancellationToken)
     {
-        var snapshot = await BuildSnapshotAsync(cancellationToken).ConfigureAwait(false);
-        return _broadcast.Subscribe([HostNotification.Create(
+        var snapshot = await BuildSnapshotAsync(caller, cancellationToken).ConfigureAwait(false);
+        var channel = Channel.CreateUnbounded<HostNotification>(new UnboundedChannelOptions { SingleReader = true });
+        channel.Writer.TryWrite(HostNotification.Create(
             MeshProtocol.NotificationMeshChanged,
             new RemoteMeshChange("snapshot", snapshot),
-            MeshProtocolJsonContext.Default.RemoteMeshChange)]);
+            MeshProtocolJsonContext.Default.RemoteMeshChange));
+        var subscriber = new MeshSubscriber(caller, channel);
+        lock (_subscribersGate)
+            _subscribers.Add(subscriber);
+        return new HostSubscription(channel.Reader, () => Unsubscribe(subscriber));
     }
 
-    public Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken)
-        => Task.FromResult(RequireAgents().List());
+    public Task<bool> CanAccessSessionAsync(HostMeshCaller caller, string sessionId, string requiredRoomAction, CancellationToken cancellationToken)
+    {
+        if (!caller.IsInviteScoped)
+            return Task.FromResult(true);
+        if (caller.ScopedRoomId is not { } roomId || Rooms is not { } rooms)
+            return Task.FromResult(false);
+        if (!rooms.CanPerform(roomId, caller.PrincipalId, requiredRoomAction))
+            return Task.FromResult(false);
+        var agentId = ResolveSessionAgentId(sessionId);
+        return Task.FromResult(agentId is { } resolved && IsActiveAgentParticipant(rooms.GetRoom(roomId), resolved));
+    }
+
+    public Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(HostMeshCaller caller, CancellationToken cancellationToken)
+    {
+        var all = RequireAgents().List();
+        if (!caller.IsInviteScoped && caller.Role == RoomRole.Owner)
+            return Task.FromResult(all);
+        var visibleAgentIds = VisibleAgentIdsFor(VisibleRoomsFor(caller));
+        IReadOnlyList<AgentProfile> filtered = [.. all.Where(profile => visibleAgentIds.Contains(profile.AgentId))];
+        return Task.FromResult(filtered);
+    }
 
     public async Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, HostMeshCaller caller, CancellationToken cancellationToken)
     {
@@ -109,8 +148,24 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 
     public async Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
     {
-        if (caller.Role != RoomRole.Owner && request.Intent == AgentMessageIntent.Control)
+        if (caller.IsInviteScoped)
+        {
+            if (request.Intent == AgentMessageIntent.Control)
+                throw new LocalRpcException("invite-scoped callers cannot send Control messages") { ErrorCode = RemoteHostServer.Unauthorized };
+            var targetAgentId = AgentId.Create(request.AgentId);
+            if (!CanAccessAgent(caller, targetAgentId, RoomActions.PromptAgent))
+                throw new LocalRpcException($"invite-scoped role {caller.Role} is not authorized to prompt agent '{request.AgentId}'") { ErrorCode = RemoteHostServer.Unauthorized };
+            if (!string.IsNullOrWhiteSpace(request.TargetSessionId)
+                && (!await CanAccessSessionAsync(caller, request.TargetSessionId, RoomActions.PromptAgent, cancellationToken).ConfigureAwait(false)
+                    || ResolveSessionAgentId(request.TargetSessionId) != targetAgentId))
+            {
+                throw new LocalRpcException($"invite-scoped role {caller.Role} is not authorized to prompt session '{request.TargetSessionId}'") { ErrorCode = RemoteHostServer.Unauthorized };
+            }
+        }
+        else if (caller.Role != RoomRole.Owner && request.Intent == AgentMessageIntent.Control)
+        {
             throw new LocalRpcException("only Owner principals can send Control messages") { ErrorCode = RemoteHostServer.Unauthorized };
+        }
 
         var bus = RequireBus();
         SessionId? sessionId = string.IsNullOrWhiteSpace(request.TargetSessionId) ? null : SessionId.Create(request.TargetSessionId);
@@ -143,12 +198,8 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 
     public Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(HostMeshCaller caller, CancellationToken cancellationToken)
     {
-        var rooms = RequireRooms();
-        var all = rooms.ListRooms();
-        if (caller.Role == RoomRole.Owner)
-            return Task.FromResult(all);
-        IReadOnlyList<CollaborationRoom> visible = [.. all.Where(room => rooms.CanPerform(room.Id, caller.PrincipalId, RoomActions.Read))];
-        return Task.FromResult(visible);
+        _ = RequireRooms();
+        return Task.FromResult(VisibleRoomsFor(caller));
     }
 
     public async Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
@@ -166,6 +217,8 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 
     public async Task<CollaborationRoom> JoinRoomAsync(RemoteRoomJoinRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
     {
+        if (caller.IsInviteScoped)
+            throw new LocalRpcException("invite-scoped callers cannot join additional rooms") { ErrorCode = RemoteHostServer.Unauthorized };
         AgentId? agentId = string.IsNullOrWhiteSpace(request.AgentId) ? null : AgentId.Create(request.AgentId);
         var room = await RequireRooms().RedeemInviteAsync(request.Token, PrincipalOf(caller), agentId, cancellationToken).ConfigureAwait(false);
         await PublishChangeAsync("rooms", room.Id.Value, cancellationToken).ConfigureAwait(false);
@@ -174,9 +227,12 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 
     public async Task<RoomMessage> PostRoomMessageAsync(RemoteRoomPostRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
     {
+        var roomId = RoomId.Create(request.RoomId);
+        if (caller.IsInviteScoped && caller.ScopedRoomId != roomId)
+            throw new LocalRpcException($"invite-scoped caller is not authorized to post to room '{request.RoomId}'") { ErrorCode = RemoteHostServer.Unauthorized };
         AgentId? targetAgentId = string.IsNullOrWhiteSpace(request.TargetAgentId) ? null : AgentId.Create(request.TargetAgentId);
         var message = await RequireRooms().PostMessageAsync(
-            RoomId.Create(request.RoomId),
+            roomId,
             PrincipalOf(caller),
             request.Body,
             targetAgentId,
@@ -190,7 +246,9 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
     {
         var rooms = RequireRooms();
         var roomId = RoomId.Create(request.RoomId);
-        if (caller.Role != RoomRole.Owner && !rooms.CanPerform(roomId, caller.PrincipalId, RoomActions.Read))
+        if (caller.IsInviteScoped && caller.ScopedRoomId != roomId)
+            throw new LocalRpcException($"invite-scoped caller is not authorized to read room '{request.RoomId}'") { ErrorCode = RemoteHostServer.Unauthorized };
+        if ((caller.IsInviteScoped || caller.Role != RoomRole.Owner) && !rooms.CanPerform(roomId, caller.PrincipalId, RoomActions.Read))
             throw new LocalRpcException($"role {caller.Role} is not authorized to read room '{request.RoomId}'") { ErrorCode = RemoteHostServer.Unauthorized };
         return Task.FromResult(rooms.ReadMessages(roomId, request.AfterSeq, request.Limit));
     }
@@ -238,32 +296,131 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 
     private async Task PublishChangeAsync(string area, string? entityId = null, CancellationToken cancellationToken = default)
     {
-        if (_broadcast.SubscriberCount == 0)
-            return;
-        var snapshot = await BuildSnapshotAsync(cancellationToken).ConfigureAwait(false);
-        _broadcast.Publish(HostNotification.Create(
-            MeshProtocol.NotificationMeshChanged,
-            new RemoteMeshChange(area, snapshot, entityId),
-            MeshProtocolJsonContext.Default.RemoteMeshChange));
+        MeshSubscriber[] subscribers;
+        lock (_subscribersGate)
+        {
+            if (_subscribers.Count == 0)
+                return;
+            subscribers = [.. _subscribers];
+        }
+
+        RemoteMeshSnapshot? fullSnapshot = null;
+        foreach (var subscriber in subscribers)
+        {
+            RemoteMeshSnapshot snapshot;
+            if (!subscriber.Caller.IsInviteScoped && subscriber.Caller.Role == RoomRole.Owner)
+                snapshot = fullSnapshot ??= await BuildSnapshotAsync(subscriber.Caller, cancellationToken).ConfigureAwait(false);
+            else
+                snapshot = await BuildSnapshotAsync(subscriber.Caller, cancellationToken).ConfigureAwait(false);
+
+            subscriber.Channel.Writer.TryWrite(HostNotification.Create(
+                MeshProtocol.NotificationMeshChanged,
+                new RemoteMeshChange(area, snapshot, entityId),
+                MeshProtocolJsonContext.Default.RemoteMeshChange));
+        }
     }
 
-    private Task<RemoteMeshSnapshot> BuildSnapshotAsync(CancellationToken cancellationToken)
+    private Task<RemoteMeshSnapshot> BuildSnapshotAsync(HostMeshCaller caller, CancellationToken cancellationToken)
     {
-        IReadOnlyList<DiscoveredAgentCard> discovered;
-        IReadOnlyList<RemoteExecutionTarget> targets;
-        lock (_cacheGate)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!caller.IsInviteScoped && caller.Role == RoomRole.Owner)
         {
-            discovered = _cachedDiscovered;
-            targets = _cachedTargets;
+            IReadOnlyList<DiscoveredAgentCard> discovered;
+            IReadOnlyList<RemoteExecutionTarget> targets;
+            lock (_cacheGate)
+            {
+                discovered = _cachedDiscovered;
+                targets = _cachedTargets;
+            }
+            return Task.FromResult(new RemoteMeshSnapshot(
+                Agents?.List() ?? [],
+                targets,
+                Rooms?.ListRooms() ?? [],
+                discovered,
+                Discovery?.ListTrust() ?? [],
+                Channels?.ListBindings() ?? [],
+                Channels?.ListTriggers() ?? []));
         }
+
+        var visibleRooms = VisibleRoomsFor(caller);
+        var visibleAgentIds = VisibleAgentIdsFor(visibleRooms);
+        IReadOnlyList<AgentProfile> visibleAgents = Agents is { } agents
+            ? [.. agents.List().Where(profile => visibleAgentIds.Contains(profile.AgentId))]
+            : [];
         return Task.FromResult(new RemoteMeshSnapshot(
-            Agents?.List() ?? [],
-            targets,
-            Rooms?.ListRooms() ?? [],
-            discovered,
-            Discovery?.ListTrust() ?? [],
-            Channels?.ListBindings() ?? [],
-            Channels?.ListTriggers() ?? []));
+            visibleAgents,
+            [],
+            visibleRooms,
+            [],
+            [],
+            [],
+            []));
+    }
+
+    private IReadOnlyList<CollaborationRoom> VisibleRoomsFor(HostMeshCaller caller)
+    {
+        if (Rooms is not { } rooms)
+            return [];
+        var all = rooms.ListRooms();
+        if (!caller.IsInviteScoped && caller.Role == RoomRole.Owner)
+            return all;
+        return [.. all.Where(room =>
+            (caller.ScopedRoomId is null || room.Id == caller.ScopedRoomId.Value)
+            && rooms.CanPerform(room.Id, caller.PrincipalId, RoomActions.Read))];
+    }
+
+    private static HashSet<AgentId> VisibleAgentIdsFor(IReadOnlyList<CollaborationRoom> visibleRooms)
+    {
+        HashSet<AgentId> result = [];
+        foreach (var room in visibleRooms)
+        {
+            foreach (var participant in room.Participants)
+            {
+                if (participant.Role == RoomRole.AgentParticipant || participant.AgentId is not null)
+                    result.Add(participant.AgentId ?? AgentId.Create(participant.PrincipalId));
+            }
+        }
+        return result;
+    }
+
+    private bool CanAccessAgent(HostMeshCaller caller, AgentId agentId, string requiredRoomAction)
+    {
+        if (!caller.IsInviteScoped)
+            return true;
+        if (caller.ScopedRoomId is not { } roomId || Rooms is not { } rooms)
+            return false;
+        return rooms.CanPerform(roomId, caller.PrincipalId, requiredRoomAction)
+            && IsActiveAgentParticipant(rooms.GetRoom(roomId), agentId);
+    }
+
+    private AgentId? ResolveSessionAgentId(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return null;
+        var sid = SessionId.Create(sessionId);
+        if (_ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, strict: false)?.Get(sid) is { } liveAgent)
+            return liveAgent.AgentId;
+        if (Agents is { } agents)
+        {
+            foreach (var profile in agents.List())
+            {
+                if (profile.ActiveSessionId == sid || profile.SessionIds.Contains(sid))
+                    return profile.AgentId;
+            }
+        }
+        return null;
+    }
+
+    private static bool IsActiveAgentParticipant(CollaborationRoom? room, AgentId agentId)
+        => room is not null && room.Participants.Any(p =>
+            (p.Role == RoomRole.AgentParticipant || p.AgentId is not null)
+            && (p.AgentId == agentId || string.Equals(p.PrincipalId, agentId.Value, StringComparison.Ordinal)));
+
+    private void Unsubscribe(MeshSubscriber subscriber)
+    {
+        lock (_subscribersGate)
+            _subscribers.Remove(subscriber);
+        subscriber.Channel.Writer.TryComplete();
     }
 
     private static MessagePrincipal PrincipalOf(HostMeshCaller caller) => caller.Role switch
@@ -295,5 +452,16 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
     private IExternalChannelRouter RequireChannels()
         => Channels ?? throw new LocalRpcException("external channel router is unavailable") { ErrorCode = JsonRpcException.MethodNotFound };
 
-    public void Dispose() => _busSubscription?.Dispose();
+    public void Dispose()
+    {
+        _busSubscription?.Dispose();
+        MeshSubscriber[] subscribers;
+        lock (_subscribersGate)
+        {
+            subscribers = [.. _subscribers];
+            _subscribers.Clear();
+        }
+        foreach (var subscriber in subscribers)
+            subscriber.Channel.Writer.TryComplete();
+    }
 }
