@@ -95,6 +95,17 @@ internal static class AnthropicSse
 
         switch (type)
         {
+            case "message_start":
+                {
+                    if (frame.TryGetProperty("message", out var message)
+                        && message.ValueKind == JsonValueKind.Object
+                        && message.TryGetProperty("usage", out var usage)
+                        && usage.ValueKind == JsonValueKind.Object)
+                    {
+                        state.MergeUsage(usage);
+                    }
+                    break;
+                }
             case "content_block_start":
                 {
                     var index = frame.GetProperty("index").GetInt32();
@@ -188,11 +199,21 @@ internal static class AnthropicSse
                         && messageDelta.TryGetProperty("stop_reason", out var stopReason)
                         && stopReason.ValueKind == JsonValueKind.String)
                         state.StopReason = stopReason.GetString();
-                    if (frame.TryGetProperty("usage", out var usage))
-                        yield return new StreamChunk.Usage(MapUsage(usage));
+                    if (frame.TryGetProperty("usage", out var usage)
+                        && usage.ValueKind == JsonValueKind.Object)
+                    {
+                        state.MergeUsage(usage);
+                        state.UsageEmitted = true;
+                        yield return new StreamChunk.Usage(state.ToTokenUsage());
+                    }
                     break;
                 }
             case "message_stop":
+                if (state.HasUsage && !state.UsageEmitted)
+                {
+                    state.UsageEmitted = true;
+                    yield return new StreamChunk.Usage(state.ToTokenUsage());
+                }
                 break;
             case "error":
                 {
@@ -226,21 +247,6 @@ internal static class AnthropicSse
         _ => throw new InvalidOperationException($"cannot close Anthropic block of type \"{open.Type}\""),
     };
 
-    private static TokenUsage MapUsage(JsonElement usage)
-    {
-        static double? Read(JsonElement element, string name)
-            => element.TryGetProperty(name, out var property) ? property.GetDouble() : null;
-
-        // Anthropic 的 input_tokens 只算未命中缓存的部分, 缓存读写分开报; 契约是"完整提示词", 所以三者相加。
-        var cacheRead = Read(usage, "cache_read_input_tokens");
-        var cacheWrite = Read(usage, "cache_creation_input_tokens");
-        var input = (Read(usage, "input_tokens") ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
-        var output = Read(usage, "output_tokens") ?? 0;
-        double? total = input is not 0 || output is not 0 ? input + output : null;
-
-        return new TokenUsage(input, output, total, cacheRead, cacheWrite);
-    }
-
     /** 回放用的原始块: thinking 原文与签名必须原样送回, redacted_thinking 只有加密数据。 */
     private static JsonObject? ReplayBlock(OpenBlock open) => open.Type switch
     {
@@ -270,6 +276,50 @@ internal static class AnthropicSse
         public readonly Dictionary<int, OpenBlock> OpenBlocks = [];
         public readonly List<JsonObject> Thinking = [];
         public string? StopReason;
+        public double? InputTokens;
+        public double? OutputTokens;
+        public double? CacheReadTokens;
+        public double? CacheWriteTokens;
+        public bool HasUsage;
+        public bool UsageEmitted;
+
+        public void MergeUsage(JsonElement usage)
+        {
+            static double? Read(JsonElement element, string name)
+                => element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number
+                    ? property.GetDouble()
+                    : null;
+
+            if (Read(usage, "input_tokens") is { } inputTokens)
+            {
+                InputTokens = inputTokens;
+                HasUsage = true;
+            }
+            if (Read(usage, "output_tokens") is { } outputTokens)
+            {
+                OutputTokens = outputTokens;
+                HasUsage = true;
+            }
+            if (Read(usage, "cache_read_input_tokens") is { } cacheReadTokens)
+            {
+                CacheReadTokens = cacheReadTokens;
+                HasUsage = true;
+            }
+            if (Read(usage, "cache_creation_input_tokens") is { } cacheWriteTokens)
+            {
+                CacheWriteTokens = cacheWriteTokens;
+                HasUsage = true;
+            }
+        }
+
+        public TokenUsage ToTokenUsage()
+        {
+            // Anthropic 的 input_tokens 只算未命中缓存的部分, 缓存读写分开报; 契约是"完整提示词", 所以三者相加。
+            var input = (InputTokens ?? 0) + (CacheReadTokens ?? 0) + (CacheWriteTokens ?? 0);
+            var output = OutputTokens ?? 0;
+            double? total = input is not 0 || output is not 0 ? input + output : null;
+            return new TokenUsage(input, output, total, CacheReadTokens, CacheWriteTokens);
+        }
     }
 
     private sealed class OpenBlock
