@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Dsh.Core;
 using Dsh.RemoteHost.Rpc;
@@ -7,8 +8,14 @@ namespace Dsh.RemoteHost;
 /** Client implementation of the optional 0.5.0 Agent Mesh domain. */
 public sealed class RemoteMeshClient : IWorkspaceMesh
 {
+    private const int MeshChangeBufferCapacity = 16;
+
     private readonly IMeshRpc _rpc;
-    private readonly Channel<RemoteMeshChange> _meshChanges = Channel.CreateUnbounded<RemoteMeshChange>();
+    private readonly Lock _gate = new();
+    private readonly HashSet<Channel<RemoteMeshChange>> _subscribers = [];
+    private RemoteMeshChange? _latest;
+    private bool _closed;
+    private Exception? _closedError;
 
     internal RemoteMeshClient(RemoteHostClient host, IMeshRpc rpc) => _rpc = rpc;
 
@@ -69,17 +76,58 @@ public sealed class RemoteMeshClient : IWorkspaceMesh
     public Task<IReadOnlyList<AutomationTriggerRule>> ListTriggersAsync(CancellationToken cancellationToken = default)
         => _rpc.ListTriggersAsync(cancellationToken);
 
-    public IAsyncEnumerable<RemoteMeshChange> MeshChangesAsync(CancellationToken cancellationToken = default)
-        => _meshChanges.Reader.ReadAllAsync(cancellationToken);
+    public async IAsyncEnumerable<RemoteMeshChange> MeshChangesAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var channel = Channel.CreateBounded<RemoteMeshChange>(new BoundedChannelOptions(MeshChangeBufferCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+        });
+        lock (_gate)
+        {
+            if (_latest is { } latest)
+                channel.Writer.TryWrite(latest);
+            if (_closed)
+                channel.Writer.TryComplete(_closedError);
+            else
+                _subscribers.Add(channel);
+        }
+        try
+        {
+            await foreach (var change in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+                yield return change;
+        }
+        finally
+        {
+            lock (_gate)
+                _subscribers.Remove(channel);
+            channel.Writer.TryComplete();
+        }
+    }
 
     internal Task OnChangedAsync(RemoteMeshChange change)
     {
-        _meshChanges.Writer.TryWrite(change);
+        lock (_gate)
+        {
+            if (_closed)
+                return Task.CompletedTask;
+            _latest = change;
+            foreach (var subscriber in _subscribers)
+                subscriber.Writer.TryWrite(change);
+        }
         return Task.CompletedTask;
     }
 
     internal void OnClosed(Exception failure)
     {
-        _meshChanges.Writer.TryComplete(failure);
+        lock (_gate)
+        {
+            if (_closed)
+                return;
+            _closed = true;
+            _closedError = failure;
+            foreach (var subscriber in _subscribers)
+                subscriber.Writer.TryComplete(failure);
+        }
     }
 }

@@ -32,7 +32,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     private readonly Dictionary<FleetSessionViewModel, Task> _retirements = [];
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private MachinesPageViewModel? _machinesPage;
-    private AgentMeshViewModel? _meshPage;
     private Task? _disposal;
     private bool _closingSessions;
     private readonly Action<string, string, bool> _toast;
@@ -283,7 +282,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     /** Registers the 0.5.0 Agent Mesh workbench page in the workspace sidebar. */
     public void RegisterMeshPage(Geometry meshIcon)
     {
-        Pages.RegisterDefault(3, new WorkspacePageEntry(WorkspacePages.Mesh, "智能体网络", meshIcon, _ => _meshPage ??= new(Fleet)));
+        Pages.RegisterDefault(3, new WorkspacePageEntry(WorkspacePages.Mesh, "智能体网络", meshIcon, _ => new AgentMeshViewModel(Fleet)));
     }
 
     /** Opens the new-session form, preset to a machine and project when started from one. */
@@ -325,7 +324,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     private async Task DisposeCoreAsync()
     {
         _machinesPage?.NativeConsole.Dispose();
-        _meshPage?.Dispose();
         Machines.BeginNetworkShutdown();
         await Machines.WaitForNetworkOperationsAsync();
         // 退出时不能让"重新加载机器列表"占着闸门把我们卡死: 拿不到就放弃收尾, 由上层超时兜底。
