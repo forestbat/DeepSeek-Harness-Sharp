@@ -240,7 +240,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
                 throw new IOException("The SSH authentication secret could not be removed.");
             try
             {
-                File.Delete(path);
+                SshTransport.DeleteAskPass(path);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {

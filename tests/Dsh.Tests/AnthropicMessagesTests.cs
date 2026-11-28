@@ -73,6 +73,10 @@ public class AnthropicMessagesTests
             assembler.Push(chunk);
 
         Assert.IsType<FinishReason.ToolCalls>(assembler.Finish);
+        Assert.NotNull(assembler.Usage);
+        Assert.Equal(12, assembler.Usage.InputTokens);
+        Assert.Equal(7, assembler.Usage.OutputTokens);
+        Assert.Equal(19, assembler.Usage.TotalTokens);
         var produced = MessageFactory.CreateAssistantMessage(assembler.Blocks(), "anthropic", Model, assembler.ReplayState?.Response);
         // 恢复会话走的是持久化后的消息: 回放状态必须经得起 JSON 往返。
         var assistant = DshJson.Deserialize<Message>(DshJson.Serialize<Message>(produced))!;
@@ -162,6 +166,39 @@ public class AnthropicMessagesTests
         var messages = body.RootElement.GetProperty("messages");
         var lastBlock = messages[messages.GetArrayLength() - 1].GetProperty("content")[0];
         Assert.Equal("ephemeral", lastBlock.GetProperty("cache_control").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task Usage_Merges_MessageStart_Input_And_Cache_Counters_With_MessageDelta()
+    {
+        string[] sse =
+        [
+            """event: message_start""",
+            """data: {"type":"message_start","message":{"id":"msg_cache","role":"assistant","content":[],"usage":{"input_tokens":12,"cache_creation_input_tokens":5,"cache_read_input_tokens":40,"output_tokens":0}}}""",
+            "",
+            """data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "",
+            """data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}""",
+            "",
+            """data: {"type":"content_block_stop","index":0}""",
+            "",
+            """data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}""",
+            "",
+            """data: {"type":"message_stop"}""",
+            "",
+        ];
+        var adapter = Adapter(new ScriptedHandler(sse));
+        var assembler = new BlockAssembler();
+
+        await foreach (var chunk in adapter.Stream(Options([MessageFactory.CreateUserText("hi")]), CancellationToken.None))
+            assembler.Push(chunk);
+
+        Assert.NotNull(assembler.Usage);
+        Assert.Equal(57, assembler.Usage.InputTokens);
+        Assert.Equal(7, assembler.Usage.OutputTokens);
+        Assert.Equal(64, assembler.Usage.TotalTokens);
+        Assert.Equal(40, assembler.Usage.CacheReadTokens);
+        Assert.Equal(5, assembler.Usage.CacheWriteTokens);
     }
 
     private static AnthropicAdapter Adapter(HttpMessageHandler handler)

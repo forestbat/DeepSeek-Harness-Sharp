@@ -320,15 +320,11 @@ public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adap
         process.Dispose();
     }
 
-    private static string WriteAskPass(string password)
+    internal static string WriteAskPass(string password)
     {
         // SSH_ASKPASS 必须是宿主平台可执行文件: Windows 用 .cmd, Unix 用 .sh(否则 ssh 无法执行, 密码认证失效)。
         if (OperatingSystem.IsWindows())
-        {
-            var command = Path.Combine(Path.GetTempPath(), $"dsh-askpass-{Guid.NewGuid():N}.cmd");
-            File.WriteAllText(command, $"@echo off\r\necho {password}\r\n", Encoding.ASCII);
-            return command;
-        }
+            return WriteWindowsAskPass(password);
 
         var path = Path.Combine(Path.GetTempPath(), $"dsh-askpass-{Guid.NewGuid():N}.sh");
         OwnerOnlyFiles.Write(path, $"#!/bin/sh\nprintf '%s\\n' {Quote(password)}\n");
@@ -336,16 +332,43 @@ public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adap
         return path;
     }
 
+    internal static string WriteWindowsAskPass(string password)
+    {
+        var command = Path.Combine(Path.GetTempPath(), $"dsh-askpass-{Guid.NewGuid():N}.cmd");
+        OwnerOnlyFiles.Write($"{command}.txt", $"{password}\r\n");
+        try
+        {
+            OwnerOnlyFiles.Write(command, "@echo off\r\ntype \"%~f0.txt\"\r\n");
+        }
+        catch
+        {
+            TryDelete(command);
+            throw;
+        }
+        return command;
+    }
+
     /** POSIX 单引号转义, 避免密码里的引号/空白破坏脚本。 */
     private static string Quote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    internal static void DeleteAskPass(string path)
+    {
+        if (path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
+        {
+            var sidecar = $"{path}.txt";
+            if (File.Exists(sidecar))
+                File.Delete(sidecar);
+        }
+        File.Delete(path);
+    }
 
     internal static void TryDelete(string path)
     {
         try
         {
-            File.Delete(path);
+            DeleteAskPass(path);
         }
-        catch (IOException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
         }
     }

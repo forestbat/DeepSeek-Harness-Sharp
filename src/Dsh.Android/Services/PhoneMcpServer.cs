@@ -37,7 +37,7 @@ public sealed class PhoneMcpServer(int port, string token) : IAsyncDisposable
         _lifetime = new CancellationTokenSource();
         var lifetime = _lifetime;
         _loop = AcceptAsync(lifetime.Token);
-        global::Android.Util.Log.Info("dsh-mobile", $"phone tools listening on {Endpoint}");
+        global::Android.Util.Log.Info("dsh-mobile", $"phone tools listening on http://{LocalAddresses()[0]}:{Port}{PhoneMcpHttp.EndpointPath}");
     }
 
     public async ValueTask DisposeAsync()

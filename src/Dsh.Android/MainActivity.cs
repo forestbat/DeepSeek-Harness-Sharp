@@ -22,6 +22,7 @@ namespace Dsh.Android;
 public class MainActivity : AvaloniaMainActivity
 {
     private const int PostNotificationsRequest = 1;
+    private const int ShareImageReadChunkBytes = 16 * 1024;
 
     /** 前台服务只允许在 App 可交互时启动; 自动连接发生在 Activity 创建之前, 由 OnResume 补启。 */
     public static bool IsForeground { get; private set; }
@@ -93,7 +94,10 @@ public class MainActivity : AvaloniaMainActivity
             ? intent.GetParcelableExtra(Intent.ExtraStream, Java.Lang.Class.FromType(typeof(global::Android.Net.Uri)))
             : intent.GetParcelableExtra(Intent.ExtraStream);
         if (stream is global::Android.Net.Uri { Scheme: not null } uri)
-            OfferImage(uri, intent.Type);
+        {
+            var declaredType = intent.Type;
+            _ = Task.Run(() => OfferImage(uri, declaredType));
+        }
     }
 
     private void OfferImage(global::Android.Net.Uri uri, string? declaredType)
@@ -107,18 +111,33 @@ public class MainActivity : AvaloniaMainActivity
                 return;
             }
             using var buffer = new MemoryStream();
-            input.CopyTo(buffer);
-            if (buffer.Length == 0 || buffer.Length > ImageAttachments.MaxBytes)
+            var chunk = new byte[ShareImageReadChunkBytes];
+            while (true)
+            {
+                var remaining = ImageAttachments.MaxBytes - (int)buffer.Length;
+                var toRead = Math.Min(chunk.Length, remaining + 1);
+                var read = input.Read(chunk, 0, toRead);
+                if (read <= 0)
+                    break;
+                if (buffer.Length + read > ImageAttachments.MaxBytes)
+                {
+                    ShareInbox.Offer(ShareItem.ForError($"分享的图片为空或超过 {ImageAttachments.MaxBytes / (1024 * 1024)} MB"));
+                    return;
+                }
+                buffer.Write(chunk, 0, read);
+            }
+            if (buffer.Length == 0)
             {
                 ShareInbox.Offer(ShareItem.ForError($"分享的图片为空或超过 {ImageAttachments.MaxBytes / (1024 * 1024)} MB"));
                 return;
             }
             var bytes = buffer.ToArray();
+            var name = DisplayName(uri);
             var mediaType = ImageAttachments.Sniff(bytes)
-                ?? ImageAttachments.MediaTypeForExtension(Path.GetExtension(DisplayName(uri)))
+                ?? ImageAttachments.MediaTypeForExtension(Path.GetExtension(name))
                 ?? declaredType
                 ?? "image/png";
-            ShareInbox.Offer(ShareItem.ForImage(DisplayName(uri), mediaType, bytes));
+            ShareInbox.Offer(ShareItem.ForImage(name, mediaType, bytes));
         }
         catch (Exception error)
         {
