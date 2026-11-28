@@ -310,8 +310,10 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
             AgentMessageIntent.Task,
             EnvelopeId: $"a2a-{context.TaskId}",
             CorrelationId: context.TaskId);
-        using (AgentTurnAttribution.Enter(attribution))
-            liveAgent.Followup(MessageFactory.CreateUserText(text));
+        var userMessage = MessageFactory.CreateUserText(text);
+        if (liveAgent is AgentLoopAgent loopAgent)
+            loopAgent.SetMessageAttribution(userMessage.Id, attribution);
+        liveAgent.Followup(userMessage);
         return (liveAgent, startSeq, null);
     }
 

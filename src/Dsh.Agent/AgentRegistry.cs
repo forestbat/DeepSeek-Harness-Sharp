@@ -13,13 +13,31 @@ public sealed record CreateAgentOptions(
     IReadOnlyList<SessionEvent>? Seed = null,
     long? InheritedEventCount = null,
     Action<Context>? Setup = null,
-    AgentId? AgentId = null);
+    AgentId? AgentId = null)
+{
+    public CreateAgentOptions(
+        SessionId? SessionId,
+        string? Cwd,
+        AgentOptions? AgentOptions,
+        string? AgentPreset,
+        IReadOnlyList<SessionEvent>? Seed,
+        long? InheritedEventCount,
+        Action<Context>? Setup)
+        : this(SessionId, Cwd, AgentOptions, AgentPreset, Seed, InheritedEventCount, Setup, null) { }
+}
 
 public sealed record ResumeAgentOptions(
     SessionId SessionId,
     AgentOptions? AgentOptions = null,
     Action<Context>? Setup = null,
-    AgentId? AgentId = null);
+    AgentId? AgentId = null)
+{
+    public ResumeAgentOptions(
+        SessionId SessionId,
+        AgentOptions? AgentOptions,
+        Action<Context>? Setup)
+        : this(SessionId, AgentOptions, Setup, null) { }
+}
 
 public sealed record AgentHandle(IAgent Agent, IDisposable Dispose);
 

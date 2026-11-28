@@ -546,10 +546,11 @@ public sealed class CollaborationDiscoveryChannelsTests
         router.SetSecret("gh-secret-ref", "super-github-secret");
         router.SetSecret("slack-secret-ref", "super-slack-secret");
         router.SetSecret("slack-bind:botToken", "xoxb-test-token");
+        router.SetSecret("discord-secret-ref", "super-discord-secret");
 
         router.Bind(new ChannelBinding("gh-bind", "github", "org/repo", ciAgentId, SecretRef: "gh-secret-ref"));
         router.Bind(new ChannelBinding("slack-bind", "slack", "C12345", slackAgentId, SecretRef: "slack-secret-ref", OutboundUrl: outboundSink.UrlFor("/slack-post")));
-        router.Bind(new ChannelBinding("discord-bind", "discord", "D999", discordAgentId, OutboundUrl: outboundSink.UrlFor("/discord-post")));
+        router.Bind(new ChannelBinding("discord-bind", "discord", "D999", discordAgentId, SecretRef: "discord-secret-ref", OutboundUrl: outboundSink.UrlFor("/discord-post")));
 
         router.AddTrigger(new AutomationTriggerRule(
             "ci-fail-trigger",
@@ -673,10 +674,18 @@ public sealed class CollaborationDiscoveryChannelsTests
         Assert.Equal(HttpStatusCode.OK, pingResp.StatusCode);
         Assert.Contains("\"type\":1", await pingResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
 
-        var discordResp = await http.PostAsync(
+        var unauthDiscordResp = await http.PostAsync(
             $"{baseUrl}/webhooks/discord",
-            new StringContent("""{"id":"dmsg-1","channel_id":"D999","content":"ping agent","author":{"id":"du1","username":"bob"}}""", Encoding.UTF8, "application/json"),
+            new StringContent("""{"id":"dmsg-0","channel_id":"D999","content":"unauth","author":{"id":"du1","username":"bob"}}""", Encoding.UTF8, "application/json"),
             TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthDiscordResp.StatusCode);
+
+        using var discordReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/webhooks/discord")
+        {
+            Content = new StringContent("""{"id":"dmsg-1","channel_id":"D999","content":"ping agent","author":{"id":"du1","username":"bob"}}""", Encoding.UTF8, "application/json"),
+        };
+        discordReq.Headers.Add("X-Webhook-Token", "super-discord-secret");
+        var discordResp = await http.SendAsync(discordReq, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, discordResp.StatusCode);
         Assert.Contains(discordAgentId, persistent.WokenAgents);
 

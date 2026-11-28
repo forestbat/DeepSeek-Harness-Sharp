@@ -458,7 +458,7 @@ public sealed class DiscordChannelAdapter(ExternalChannelRouter router, Func<Htt
         {
             var secret = router.ResolveSecret(binding);
             if (string.IsNullOrEmpty(secret))
-                return binding;
+                continue;
 
             if (headers.TryGetValue("x-hub-signature-256", out var sig)
                 && WebhookChannelAdapter.VerifySignature(secret, rawBody, sig))

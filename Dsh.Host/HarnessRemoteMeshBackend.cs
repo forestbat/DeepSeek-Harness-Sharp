@@ -109,6 +109,9 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
 
     public async Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
     {
+        if (caller.Role != RoomRole.Owner && request.Intent == AgentMessageIntent.Control)
+            throw new LocalRpcException("only Owner principals can send Control messages") { ErrorCode = RemoteHostServer.Unauthorized };
+
         var bus = RequireBus();
         SessionId? sessionId = string.IsNullOrWhiteSpace(request.TargetSessionId) ? null : SessionId.Create(request.TargetSessionId);
         var envelope = new AgentEnvelope(
@@ -138,8 +141,15 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
         return targets;
     }
 
-    public Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken)
-        => Task.FromResult(RequireRooms().ListRooms());
+    public Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(HostMeshCaller caller, CancellationToken cancellationToken)
+    {
+        var rooms = RequireRooms();
+        var all = rooms.ListRooms();
+        if (caller.Role == RoomRole.Owner)
+            return Task.FromResult(all);
+        IReadOnlyList<CollaborationRoom> visible = [.. all.Where(room => rooms.CanPerform(room.Id, caller.PrincipalId, RoomActions.Read))];
+        return Task.FromResult(visible);
+    }
 
     public async Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
     {
@@ -176,8 +186,14 @@ public sealed class HarnessRemoteMeshBackend : IRemoteMeshBackend, IDisposable
         return message;
     }
 
-    public Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, CancellationToken cancellationToken)
-        => Task.FromResult(RequireRooms().ReadMessages(RoomId.Create(request.RoomId), request.AfterSeq, request.Limit));
+    public Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, HostMeshCaller caller, CancellationToken cancellationToken)
+    {
+        var rooms = RequireRooms();
+        var roomId = RoomId.Create(request.RoomId);
+        if (caller.Role != RoomRole.Owner && !rooms.CanPerform(roomId, caller.PrincipalId, RoomActions.Read))
+            throw new LocalRpcException($"role {caller.Role} is not authorized to read room '{request.RoomId}'") { ErrorCode = RemoteHostServer.Unauthorized };
+        return Task.FromResult(rooms.ReadMessages(roomId, request.AfterSeq, request.Limit));
+    }
 
     public async Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request, CancellationToken cancellationToken)
     {

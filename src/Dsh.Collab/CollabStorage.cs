@@ -92,12 +92,14 @@ internal static class CollabStorage
 
     private static void EnsureOwnerDirectory(string directory)
     {
-        if (Directory.Exists(directory))
-            return;
         if (OperatingSystem.IsWindows())
+        {
             Directory.CreateDirectory(directory);
-        else
-            Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            return;
+        }
+        const UnixFileMode mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(directory, mode);
+        File.SetUnixFileMode(directory, mode);
     }
 
     private static FileStream OpenOwnerTempStream(string tempPath, bool async)

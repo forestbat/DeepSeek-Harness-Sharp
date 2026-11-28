@@ -208,6 +208,9 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
 
         if (bus is not null)
         {
+            var trust = AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent
+                ? MessageTrustLevel.ExternalAgent
+                : MessageTrustLevel.TrustedPeerAgent;
             var targetAgentId = parentAgent?.AgentId ?? AgentId.FromSession(parentSessionId);
             var envelope = new AgentEnvelope(
                 EnvelopeId: $"subagent-parent-{Guid.NewGuid():N}",
@@ -217,7 +220,7 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
                     PrincipalKind.Agent,
                     sender.AgentId.Value,
                     sender.Session.Header.SubagentLabel ?? sender.Id.Value),
-                TrustLevel: MessageTrustLevel.TrustedPeerAgent,
+                TrustLevel: trust,
                 Intent: intent == AgentMessageIntent.Control ? AgentMessageIntent.Task : intent,
                 Body: text,
                 CreatedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -277,6 +280,9 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
                     $"target agent \"{peerKey}\" is unknown or not reachable",
                     SubagentErrorCodes.ContinuationUnavailable);
             }
+            var trust = AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent
+                ? MessageTrustLevel.ExternalAgent
+                : MessageTrustLevel.TrustedPeerAgent;
             var targetAgentId = liveInRegistry?.AgentId ?? profile?.AgentId ?? peerAgentId;
             var targetSessionId = liveInRegistry?.Id ?? profile?.ActiveSessionId;
             var envelope = new AgentEnvelope(
@@ -287,7 +293,7 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
                     PrincipalKind.Agent,
                     sender.AgentId.Value,
                     sender.Session.Header.SubagentLabel ?? sender.Id.Value),
-                TrustLevel: MessageTrustLevel.TrustedPeerAgent,
+                TrustLevel: trust,
                 Intent: intent == AgentMessageIntent.Control ? AgentMessageIntent.Task : intent,
                 Body: PlainText(content),
                 CreatedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

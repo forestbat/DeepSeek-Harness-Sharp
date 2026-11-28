@@ -716,7 +716,7 @@ public sealed class RemoteHostServer(
         public Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken)
         {
             authorize(HostAction.Read);
-            return backend.ListRoomsAsync(cancellationToken);
+            return backend.ListRoomsAsync(caller(), cancellationToken);
         }
 
         public Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, CancellationToken cancellationToken)
@@ -746,7 +746,7 @@ public sealed class RemoteHostServer(
         public Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, CancellationToken cancellationToken)
         {
             authorize(HostAction.Read);
-            return backend.ReadRoomMessagesAsync(request, cancellationToken);
+            return backend.ReadRoomMessagesAsync(request, caller(), cancellationToken);
         }
 
         public Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request, CancellationToken cancellationToken)
@@ -1003,8 +1003,26 @@ public sealed class RemoteHostServer(
     {
         public Task<RemoteCommandResult> ExecuteCommandAsync(RemoteCommandRequest request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.SendMessage);
+            var trimmed = request.Line.TrimStart();
+            if (IsAdminSlashCommand(trimmed))
+                authorize(HostAction.Admin);
+            else
+                authorize(HostAction.SendMessage);
             return inner.ExecuteCommandAsync(request, cancellationToken);
+        }
+
+        private static bool IsAdminSlashCommand(string trimmed)
+        {
+            if (!trimmed.StartsWith('/'))
+                return false;
+            var space = trimmed.IndexOf(' ');
+            var command = space > 1 ? trimmed[..space] : trimmed;
+            return command.Equals("/discover", StringComparison.OrdinalIgnoreCase)
+                || command.Equals("/room", StringComparison.OrdinalIgnoreCase)
+                || command.Equals("/channel", StringComparison.OrdinalIgnoreCase)
+                || command.Equals("/plugins", StringComparison.OrdinalIgnoreCase)
+                || command.Equals("/safety", StringComparison.OrdinalIgnoreCase)
+                || command.Equals("/sandbox", StringComparison.OrdinalIgnoreCase);
         }
 
         public Task<IReadOnlyList<RemoteCommandDescriptor>> ListCommandsAsync(RemoteCommandRequest request, CancellationToken cancellationToken)
@@ -1033,7 +1051,7 @@ public sealed class RemoteHostServer(
 
         public Task<bool> SetApprovalPolicyAsync(RemoteSessionPolicyRequest request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.MutateSession);
+            authorize(HostAction.Approve);
             return inner.SetApprovalPolicyAsync(request, cancellationToken);
         }
 

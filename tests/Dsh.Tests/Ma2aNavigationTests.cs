@@ -33,7 +33,7 @@ public sealed class Ma2aNavigationTests
                 var navigation = window.GetVisualDescendants().OfType<SidebarView>().Single()
                     .GetVisualDescendants().OfType<Button>()
                     .Where(button => button.CommandParameter is WorkspacePageEntry).ToArray();
-                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines],
+                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, WorkspacePages.Mesh],
                     navigation.Select(button => Assert.IsType<WorkspacePageEntry>(button.CommandParameter).Id));
 
                 var machinesEntry = navigation.Single(button => button.CommandParameter is WorkspacePageEntry { Id: WorkspacePages.Machines });

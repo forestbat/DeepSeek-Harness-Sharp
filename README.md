@@ -216,17 +216,22 @@ network:
 ```
 </details>
 
-### 多 Agent 协作
+### 多 Agent 协作与通用基础设施
 
-目前采取 Agent（主会话）-SubAgent 模式进行多 Agent 协作，支持多个 Agent 构成的森林；SubAgent 之间通过共享看板协调，也可接入 A2A 与外部 Agent。
+支持两种互补的协作形态：
 
-- SubAgent 支持 `spawn` 独立上下文/`fork` 继承当前上下文两种派生方法，支持后台运行、模型选择、工具过滤与委派深度等功能或配置。
-- 工具：`subagent`、`list_subagent_models`、`send_message`、`interrupt_agent`、`list_agents`。
-- 共享看板：`board_post`、`board_read`、`board_claim`、`board_release`。
-- 看板软行锁：按路径和行区间声明编辑意图，以防其他 SubAgent 乱改，`ttl` 到期自动失效；重叠声明返回冲突，只作 advisory。
-- 大规模编排：使用 `workflow`(Dsh.Workflow) 管理持久工作流，或用 `run_code`(Dsh.Ptc) 通过 C# 批量启动子 Agent；代码调用与原生工具可以在同一会话中组合，无需切换模式。
-- A2A支持：带有`a2a_card`、`a2a_send`、`a2a_get`、`a2a_list`、`a2a_cancel`工具，可作 A2A server 或连接远端 Agent。
-- 外部 Agent：目前支持 Codex、Claude Code、OpenCode、Kilo Code 或任意 ACP Agent。
+1. **Agent-SubAgent 树与工作流**：主会话通过 `subagent`（`spawn`/`fork`/`headless`）、`workflow` 与 `run_code` 批量派生子代理，支持后台运行、模型选择、工具过滤与委派深度控制。
+2. **通用 Agent 基础设施（0.5.0）**：
+   - **长期身份与持久化休眠唤醒**：`AgentId` 独立于单次 `SessionId`，支持一个 Agent 关联多个会话并在 `Idle` / `Suspended` 之间按消息、订阅事件或定时任务唤醒，自动冲刷离线信箱（工具：`agent_targets`、`agent_spawn`、`agent_wake`、`agent_suspend`、`agent_message`、`agent_subscribe`；命令：`/agent`）。
+   - **统一消息与信任分级**：消息区分 `OwnerHuman`、`DelegatedHuman`、`TrustedPeerAgent` 与 `ExternalAgent`，可直接进入目标 Agent 当前运行中或休眠中的收件箱，无需停止或重建会话；`ExternalAgent` 无法直接触发高权限控制操作或绕过审批策略。
+   - **统一远端执行**：本地 `AgentLoop`、Fleet 远程主机、MA2A、A2A 与 Host ACP 会话共用统一调度路由，可在同一个 `workflow` 中混合调度本地与远端 Agent；`SwarmBoard` 支持指定显式 `board_id` 用于跨根会话团队协作。
+   - **多人协作空间与发现授权（`@deepseek-ai/dsh-collab`）**：将单个 Agent 的内部 Session 与多人共享的 `CollaborationRoom` 分离，支持 `Owner`、`Approver`、`Collaborator`、`Observer` 与 `AgentParticipant` 角色和可撤销邀请令牌；Agent Discovery 与显式 Trust 授权分离（发现卡片不自动授予文件、工具或会话权限）。工具：`room_create`、`room_invite`、`room_join`、`room_post`、`room_read`、`agent_discover`、`agent_trust`；命令：`/room`、`/discover`。
+   - **外部通道与事件触发（`@deepseek-ai/dsh-channels`）**：支持 Webhook（含 GitHub `X-Hub-Signature-256` HMAC-SHA256 验签）、Slack（`X-Slack-Signature` 与回复）、Discord 与自动化触发规则唤醒休眠 Agent。工具：`channel_bind`、`channel_send`、`trigger_add`、`trigger_list`；命令：`/channel`。
+   - **工作台与远端协议**：GUI 新增 **智能体网络（Mesh）** 页面统一管理 Agent、协作空间、发现授权与外部通道；`HostProtocol` 维持版本 2，通过增量能力协商向桌面端、Web 与移动客户端开放。
+
+- 共享看板：`board_post`、`board_read`、`board_claim`、`board_release`（支持可选 `board_id` 跨会话协作与行区间软锁）。
+- A2A 支持：`a2a_card`、`a2a_send`（支持 `context_id` 多轮续传）、`a2a_get`、`a2a_list`、`a2a_cancel`，对已知会话直接注入消息而不重建会话。
+- 外部 Agent：支持 Codex、Claude Code、OpenCode、Kilo Code 或任意 ACP Agent。
 
 <details>
 <summary>多 Agent 配置</summary>

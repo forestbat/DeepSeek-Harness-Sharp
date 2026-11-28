@@ -249,9 +249,8 @@ public sealed class MeshHostAndGuiTests
     [Fact]
     public async Task AcpAgentExecutionBackend_AdaptsExternalSessionsAndRegistersInRouter()
     {
-        var router = new InMemoryRouter();
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
-        environment.App.Ctx.Provide(IAgentExecutionRouter.ServiceName, router);
+        var router = environment.App.Ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName)!;
 
         await using var backend = await HarnessRemoteHostBackend.CreateAsync(environment.App, HostPtyDaemonForTests.Unused, Ct);
         backend.Sessions.Register(new RemoteSessionSummary(

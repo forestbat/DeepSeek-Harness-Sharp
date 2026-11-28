@@ -175,9 +175,7 @@ public sealed class CollaborationRoomService : Service, ICollaborationRoomServic
                     throw new InvalidOperationException("Invite has reached its maximum uses.");
 
                 state.Invites[inviteIndex] = invite with { UsedCount = invite.UsedCount + 1 };
-                var resolvedRole = agentId is not null && invite.Role != RoomRole.Owner
-                    ? invite.Role
-                    : invite.Role;
+                var resolvedRole = invite.Role;
                 var participant = new RoomParticipant(
                     joiner.Id,
                     joiner.Kind,
@@ -414,11 +412,19 @@ public sealed class CollaborationRoomService : Service, ICollaborationRoomServic
         lock (_stateLock)
             _pendingPrompts[correlationId] = new PendingAgentPrompt(room.Id, roomMessage.MessageId, targetAgentId, agentDisplayName);
 
-        var trustLevel = senderRole == RoomRole.Owner
-            ? MessageTrustLevel.OwnerHuman
-            : MessageTrustLevel.DelegatedHuman;
+        var trustLevel = roomMessage.SenderKind == PrincipalKind.ExternalChannel
+            ? MessageTrustLevel.ExternalAgent
+            : senderRole == RoomRole.Owner
+                ? MessageTrustLevel.OwnerHuman
+                : MessageTrustLevel.DelegatedHuman;
+        var senderKind = roomMessage.SenderKind switch
+        {
+            PrincipalKind.RemoteUser => PrincipalKind.RemoteUser,
+            PrincipalKind.ExternalChannel => PrincipalKind.ExternalChannel,
+            _ => PrincipalKind.Human,
+        };
         var sender = new MessagePrincipal(
-            roomMessage.SenderKind == PrincipalKind.RemoteUser ? PrincipalKind.RemoteUser : PrincipalKind.Human,
+            senderKind,
             roomMessage.SenderPrincipalId,
             roomMessage.SenderDisplayName,
             ChannelId: room.Id.Value);

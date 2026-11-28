@@ -300,6 +300,8 @@ public static class CollabTools
 
             var cardId = RequireString(args, "card_id");
             var actor = CallerPrincipal(exec).Id;
+            if (action is "grant" or "revoke" && AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent)
+                throw new UnauthorizedAccessException("ExternalAgent turns cannot modify agent trust permissions.");
             return action switch
             {
                 "get" => Task.FromResult<object?>(SerializeTrust(discovery.GetTrust(cardId)

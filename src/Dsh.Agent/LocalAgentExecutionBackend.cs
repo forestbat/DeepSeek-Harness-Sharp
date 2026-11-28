@@ -160,12 +160,15 @@ public sealed class LocalAgentExecutionBackend(Context ctx) : IAgentExecutionBac
             var bus = ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
             if (bus is not null)
             {
+                var trust = AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent
+                    ? MessageTrustLevel.ExternalAgent
+                    : MessageTrustLevel.TrustedPeerAgent;
                 var envelope = new AgentEnvelope(
                     $"env-{Guid.NewGuid():N}",
                     agent.AgentId,
                     agent.Id,
                     sender ?? new MessagePrincipal(PrincipalKind.System, "execution-router", "LocalAgentExecutionBackend"),
-                    MessageTrustLevel.TrustedPeerAgent,
+                    trust,
                     intent,
                     message,
                     CreatedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -273,13 +274,14 @@ public sealed class PersistentAgentManager : Service, IPersistentAgentManager, I
     {
         var persistence = Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
         var sessions = Ctx.Get<SessionStore>(SessionStore.ServiceName, false);
+        var resolvedOptions = ResolveAgentOptions(profile.Options);
 
         if (profile.ActiveSessionId is { } targetSessionId)
         {
             if (persistence?.Stat(targetSessionId) is not null)
             {
                 var resumed = await agents.Resume(
-                    new ResumeAgentOptions(targetSessionId, profile.Options, AgentId: profile.AgentId),
+                    new ResumeAgentOptions(targetSessionId, resolvedOptions, AgentId: profile.AgentId),
                     cancellationToken).ConfigureAwait(false);
                 return resumed.Agent;
             }
@@ -289,7 +291,7 @@ public sealed class PersistentAgentManager : Service, IPersistentAgentManager, I
                     new CreateAgentOptions(
                         SessionId: targetSessionId,
                         Cwd: profile.Cwd,
-                        AgentOptions: profile.Options,
+                        AgentOptions: resolvedOptions,
                         AgentPreset: profile.AgentPreset,
                         AgentId: profile.AgentId),
                     cancellationToken).ConfigureAwait(false);
@@ -300,11 +302,30 @@ public sealed class PersistentAgentManager : Service, IPersistentAgentManager, I
         var created = await agents.Create(
             new CreateAgentOptions(
                 Cwd: profile.Cwd,
-                AgentOptions: profile.Options,
+                AgentOptions: resolvedOptions,
                 AgentPreset: profile.AgentPreset,
                 AgentId: profile.AgentId),
             cancellationToken).ConfigureAwait(false);
         return created.Agent;
+    }
+
+    private AgentOptions? ResolveAgentOptions(AgentOptions? configured)
+    {
+        if (configured is { Provider.Length: > 0, Model.Length: > 0 })
+            return configured;
+        var harnessOptions = Ctx.GetProp("harnessOptions") as HarnessOptions;
+        var settingsDefault = harnessOptions is not null
+            ? HarnessSettings.Load(harnessOptions.Home).ResolveDefaultModel()
+            : null;
+        var provider = !string.IsNullOrWhiteSpace(configured?.Provider)
+            ? configured.Provider
+            : harnessOptions?.Provider ?? settingsDefault?.Provider;
+        var model = !string.IsNullOrWhiteSpace(configured?.Model)
+            ? configured.Model
+            : harnessOptions?.Model ?? settingsDefault?.Model;
+        if (string.IsNullOrWhiteSpace(provider) && string.IsNullOrWhiteSpace(model))
+            return configured;
+        return new AgentOptions(provider, model, configured?.ReasoningEffort, configured?.MaxTokens);
     }
 
     private AgentProfile UpdateProfileOnWake(AgentProfile profile, IAgent agent)

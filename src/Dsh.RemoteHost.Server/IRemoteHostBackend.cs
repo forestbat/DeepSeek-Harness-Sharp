@@ -52,12 +52,12 @@ public interface IRemoteMeshBackend
     Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
     Task<IReadOnlyList<RemoteExecutionTarget>> ListTargetsAsync(CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(HostMeshCaller caller, CancellationToken cancellationToken);
     Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
     Task<RoomInvite> CreateInviteAsync(RemoteRoomInviteRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
     Task<CollaborationRoom> JoinRoomAsync(RemoteRoomJoinRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
     Task<RoomMessage> PostRoomMessageAsync(RemoteRoomPostRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
-    Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, CancellationToken cancellationToken);
+    Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request, CancellationToken cancellationToken);
     Task<AgentTrustRecord> GrantTrustAsync(RemoteTrustGrantRequest request, HostMeshCaller caller, CancellationToken cancellationToken);
