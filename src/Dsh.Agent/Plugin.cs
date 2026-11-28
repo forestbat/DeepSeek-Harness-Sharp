@@ -32,7 +32,11 @@ public sealed class Plugin(string packageName) : IDshPlugin
         _ = new AgentRegistry(ctx);
         // 持久化插件声明依赖 core 的服务, 因此它总是晚于 core 加载; 这里必须按需解析而不是取值快照。
         _ = new AgentLoop(ctx, AgentLoopConfigFrom(config), _ => PersistenceOf(ctx));
-        return new NoopDisposable();
+        var manager = new PersistentAgentManager(ctx);
+        _ = new AgentMessageBus(ctx);
+        _ = new AgentExecutionRouter(ctx);
+        var tools = AgentCoordinationTools.Register(ctx);
+        return new DisposableBundle(tools, manager);
     }
 
     private static ISessionPersistence PersistenceOf(Context ctx)
@@ -71,10 +75,12 @@ public sealed class Plugin(string packageName) : IDshPlugin
             _ => null,
         };
 
-    private sealed class NoopDisposable : IDisposable
+    private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable
     {
         public void Dispose()
         {
+            foreach (var disposable in disposables)
+                disposable.Dispose();
         }
     }
 }

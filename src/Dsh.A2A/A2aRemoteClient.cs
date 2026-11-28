@@ -1,11 +1,15 @@
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using A2A;
 using Dsh.Boot;
 using Dsh.Runtime;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using A2AMessage = A2A.Message;
-using A2ARole = A2A.Role;
 using A2APart = A2A.Part;
+using A2ARole = A2A.Role;
 
 namespace Dsh.A2A;
 
@@ -27,20 +31,30 @@ public sealed record A2aCardResult(
 
 /**
  * A2A Client: 用官方 SDK(A2ACardResolver/A2AClient) 调用远端 A2A Server。
- * target 是配置里的 remote 名, 或绝对 http(s) URL; URL 解析为基地址, 再从 agent card 取 JSON-RPC 端点。
- * A2A 是 client-server, 只做 Server 的实现之间不会自己产生会话, 这个类补的正是 DSH 缺的 Client 角色。
+ * 支持 TTL 缓存 AgentCard 与可选 contextId 多轮续接。
  */
-public sealed class A2aRemoteClient(IReadOnlyDictionary<string, A2aRemoteSettings> remotes, OutboundProxy? proxy = null)
+public sealed class A2aRemoteClient(
+    IReadOnlyDictionary<string, A2aRemoteSettings> remotes,
+    OutboundProxy? proxy = null,
+    TimeSpan? cardCacheTtl = null,
+    TimeProvider? clock = null)
 {
     private const int PollIntervalMs = 300;
     private const string ProtocolVersionHeader = "A2A-Version";
+    private static readonly TimeSpan DefaultCardCacheTtl = TimeSpan.FromMinutes(5);
+
+    private sealed record CachedCard(AgentCard Card, DateTimeOffset ExpiresAt);
 
     private readonly IReadOnlyDictionary<string, A2aRemoteSettings> _remotes = remotes;
     private readonly OutboundProxy _proxy = proxy ?? new OutboundProxy();
+    private readonly TimeSpan _cardCacheTtl = cardCacheTtl ?? DefaultCardCacheTtl;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly ConcurrentDictionary<string, CachedCard> _cardCache = new(StringComparer.Ordinal);
 
     public async Task<A2aCardResult> CardAsync(string target, CancellationToken cancellationToken)
     {
-        var (card, _, _) = await ConnectAsync(target, cancellationToken);
+        var (baseUri, headers) = Resolve(target);
+        var card = await GetOrFetchCardAsync(baseUri, headers, cancellationToken).ConfigureAwait(false);
         return new A2aCardResult(
             true,
             card.Name,
@@ -52,9 +66,18 @@ public sealed class A2aRemoteClient(IReadOnlyDictionary<string, A2aRemoteSetting
             null);
     }
 
-    public async Task<A2aTaskResult> SendAsync(string target, string message, bool wait, int timeoutSeconds, CancellationToken cancellationToken)
+    public Task<A2aTaskResult> SendAsync(string target, string message, bool wait, int timeoutSeconds, CancellationToken cancellationToken)
+        => SendAsync(target, message, wait, timeoutSeconds, contextId: null, cancellationToken);
+
+    public async Task<A2aTaskResult> SendAsync(
+        string target,
+        string message,
+        bool wait,
+        int timeoutSeconds,
+        string? contextId,
+        CancellationToken cancellationToken = default)
     {
-        var (_, client, http) = await ConnectAsync(target, cancellationToken);
+        var (_, client, http) = await ConnectAsync(target, cancellationToken).ConfigureAwait(false);
         using (http)
         using (client)
         {
@@ -63,65 +86,102 @@ public sealed class A2aRemoteClient(IReadOnlyDictionary<string, A2aRemoteSetting
                 Message = new A2AMessage
                 {
                     MessageId = Guid.NewGuid().ToString("N"),
+                    ContextId = string.IsNullOrWhiteSpace(contextId) ? null : contextId,
                     Role = A2ARole.User,
                     Parts = [A2APart.FromText(message)],
                 },
             };
             if (!wait)
                 request.Configuration = new SendMessageConfiguration { ReturnImmediately = true };
-            var response = await client.SendMessageAsync(request, cancellationToken);
+            var response = await client.SendMessageAsync(request, cancellationToken).ConfigureAwait(false);
             if (response.Task is not { } task)
                 return new A2aTaskResult(true, null, response.Message is { } direct ? Join(direct.Parts) : null, null);
             if (wait)
-                task = await PollAsync(client, task, timeoutSeconds, cancellationToken);
+                task = await PollAsync(client, task, timeoutSeconds, cancellationToken).ConfigureAwait(false);
             return new A2aTaskResult(true, View(task), null, null);
         }
     }
 
     public async Task<A2aTaskResult> GetAsync(string target, string taskId, CancellationToken cancellationToken)
     {
-        var (_, client, http) = await ConnectAsync(target, cancellationToken);
+        var (_, client, http) = await ConnectAsync(target, cancellationToken).ConfigureAwait(false);
         using (http)
         using (client)
         {
-            var task = await client.GetTaskAsync(new GetTaskRequest { Id = taskId }, cancellationToken);
+            var task = await client.GetTaskAsync(new GetTaskRequest { Id = taskId }, cancellationToken).ConfigureAwait(false);
             return new A2aTaskResult(true, View(task), null, null);
         }
     }
 
     public async Task<A2aTasksResult> ListAsync(string target, string? contextId, int pageSize, CancellationToken cancellationToken)
     {
-        var (_, client, http) = await ConnectAsync(target, cancellationToken);
+        var (_, client, http) = await ConnectAsync(target, cancellationToken).ConfigureAwait(false);
         using (http)
         using (client)
         {
             var response = await client.ListTasksAsync(
                 new ListTasksRequest { ContextId = contextId, PageSize = pageSize },
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             return new A2aTasksResult(true, [.. response.Tasks.Select(task => View(task))], null);
         }
     }
 
     public async Task<A2aTaskResult> CancelAsync(string target, string taskId, CancellationToken cancellationToken)
     {
-        var (_, client, http) = await ConnectAsync(target, cancellationToken);
+        var (_, client, http) = await ConnectAsync(target, cancellationToken).ConfigureAwait(false);
         using (http)
         using (client)
         {
-            var task = await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, cancellationToken);
+            var task = await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, cancellationToken).ConfigureAwait(false);
             return new A2aTaskResult(true, View(task), null, null);
         }
+    }
+
+    public void InvalidateCardCache(string? target = null)
+    {
+        if (target is null)
+        {
+            _cardCache.Clear();
+            return;
+        }
+        var (baseUri, headers) = Resolve(target);
+        _cardCache.TryRemove(BuildCardCacheKey(baseUri, headers), out _);
+    }
+
+    internal static string? SanitizeEndpoint(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+        {
+            var builder = new UriBuilder(uri)
+            {
+                UserName = "",
+                Password = "",
+                Query = "",
+                Fragment = "",
+            };
+            return builder.Uri.GetLeftPart(UriPartial.Path);
+        }
+        var cut = raw.IndexOfAny(['?', '#']);
+        var stripped = cut >= 0 ? raw[..cut] : raw;
+        var schemeEnd = stripped.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd >= 0)
+        {
+            var authorityStart = schemeEnd + 3;
+            var pathStart = stripped.IndexOf('/', authorityStart);
+            var authorityEnd = pathStart >= 0 ? pathStart : stripped.Length;
+            var at = stripped.IndexOf('@', authorityStart, authorityEnd - authorityStart);
+            if (at >= 0)
+                stripped = string.Concat(stripped.AsSpan(0, authorityStart), stripped.AsSpan(at + 1));
+        }
+        return stripped;
     }
 
     private async Task<(AgentCard Card, A2AClient Client, HttpClient Http)> ConnectAsync(string target, CancellationToken cancellationToken)
     {
         var (baseUri, headers) = Resolve(target);
-        AgentCard card;
-        using (var cardHttp = new HttpClient(_proxy.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan })
-        {
-            Apply(cardHttp, headers);
-            card = await FetchCardAsync(baseUri, cardHttp, cancellationToken);
-        }
+        var card = await GetOrFetchCardAsync(baseUri, headers, cancellationToken).ConfigureAwait(false);
         // 协议版本从 card 自动取(如 qwen 强制要求 A2A-Version: 1.0), 用户不必手填; 显式配置则优先。
         var rpcHeaders = new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         if (!rpcHeaders.ContainsKey(ProtocolVersionHeader)
@@ -132,6 +192,53 @@ public sealed class A2aRemoteClient(IReadOnlyDictionary<string, A2aRemoteSetting
         var rpc = card.SupportedInterfaces.FirstOrDefault()?.Url;
         var rpcUri = string.IsNullOrWhiteSpace(rpc) ? baseUri : new Uri(rpc);
         return (card, new A2AClient(rpcUri, http), http);
+    }
+
+    private async Task<AgentCard> GetOrFetchCardAsync(
+        Uri baseUri,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = BuildCardCacheKey(baseUri, headers);
+        var now = _clock.GetUtcNow();
+        if (_cardCacheTtl > TimeSpan.Zero
+            && _cardCache.TryGetValue(cacheKey, out var cached)
+            && cached.ExpiresAt > now)
+        {
+            return cached.Card;
+        }
+
+        using var cardHttp = new HttpClient(_proxy.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
+        Apply(cardHttp, headers);
+        var card = await FetchCardAsync(baseUri, cardHttp, cancellationToken).ConfigureAwait(false);
+        if (_cardCacheTtl > TimeSpan.Zero)
+            _cardCache[cacheKey] = new CachedCard(card, _clock.GetUtcNow().Add(_cardCacheTtl));
+        return card;
+    }
+
+    private static string BuildCardCacheKey(Uri baseUri, IReadOnlyDictionary<string, string> headers)
+    {
+        var sorted = headers
+            .Select(pair => (Name: pair.Key.ToLowerInvariant(), pair.Value))
+            .OrderBy(pair => pair.Name, StringComparer.Ordinal)
+            .ThenBy(pair => pair.Value, StringComparer.Ordinal);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> lengthPrefix = stackalloc byte[sizeof(int)];
+        foreach (var (name, value) in sorted)
+        {
+            AppendLengthPrefixedUtf8(hash, lengthPrefix, name);
+            AppendLengthPrefixedUtf8(hash, lengthPrefix, value);
+        }
+        var digest = Convert.ToHexString(hash.GetHashAndReset());
+        return $"{baseUri.AbsoluteUri}|{digest}";
+    }
+
+    private static void AppendLengthPrefixedUtf8(IncrementalHash hash, Span<byte> lengthBuffer, string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        BinaryPrimitives.WriteInt32LittleEndian(lengthBuffer, bytes.Length);
+        hash.AppendData(lengthBuffer);
+        hash.AppendData(bytes);
     }
 
     private static void Apply(HttpClient http, IReadOnlyDictionary<string, string> headers)
@@ -147,7 +254,7 @@ public sealed class A2aRemoteClient(IReadOnlyDictionary<string, A2aRemoteSetting
     private static async Task<AgentCard> FetchCardAsync(Uri baseUri, HttpClient http, CancellationToken cancellationToken)
     {
         var cardUri = new Uri($"{baseUri.ToString().TrimEnd('/')}/.well-known/agent-card.json");
-        var json = await http.GetStringAsync(cardUri, cancellationToken);
+        var json = await http.GetStringAsync(cardUri, cancellationToken).ConfigureAwait(false);
         var node = JsonNode.Parse(json) as JsonObject
             ?? throw new InvalidOperationException($"agent card at {cardUri} is not a JSON object");
         foreach (var field in new[] { "supportedInterfaces", "skills", "defaultInputModes", "defaultOutputModes", "signatures" })
@@ -205,8 +312,8 @@ public sealed class A2aRemoteClient(IReadOnlyDictionary<string, A2aRemoteSetting
         var deadline = DateTimeOffset.UtcNow.AddSeconds(timeoutSeconds);
         while (!IsTerminal(task.Status.State) && DateTimeOffset.UtcNow < deadline)
         {
-            await Task.Delay(PollIntervalMs, cancellationToken);
-            task = await client.GetTaskAsync(new GetTaskRequest { Id = task.Id }, cancellationToken);
+            await Task.Delay(PollIntervalMs, cancellationToken).ConfigureAwait(false);
+            task = await client.GetTaskAsync(new GetTaskRequest { Id = task.Id }, cancellationToken).ConfigureAwait(false);
         }
         return task;
     }

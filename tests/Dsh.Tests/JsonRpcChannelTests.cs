@@ -94,6 +94,7 @@ public sealed partial class JsonRpcChannelTests
         AssertGenerated<IPluginsRpc>(client);
         AssertGenerated<IPtyRpc>(client);
         AssertGenerated<ISessionEditingRpc>(client);
+        AssertGenerated<IMeshRpc>(client);
         AssertGenerated<IHostPush>(client);
     }
 
@@ -105,7 +106,7 @@ public sealed partial class JsonRpcChannelTests
     {
         var formatter = Assert.IsType<SystemTextJsonFormatter>(HostRpcFormatter.CreateJson());
         Type[] contracts = [typeof(IHostRpc), typeof(IAgentRpc), typeof(IFilesRpc), typeof(IGitRpc), typeof(INetworkRpc),
-            typeof(INotificationsRpc), typeof(IPluginsRpc), typeof(IPtyRpc), typeof(ISessionEditingRpc), typeof(IHostPush)];
+            typeof(INotificationsRpc), typeof(IPluginsRpc), typeof(IPtyRpc), typeof(ISessionEditingRpc), typeof(IMeshRpc), typeof(IHostPush)];
         foreach (var method in contracts.SelectMany(contract => contract.GetMethods()))
         {
             foreach (var parameter in method.GetParameters().Where(parameter => parameter.ParameterType != typeof(CancellationToken)))

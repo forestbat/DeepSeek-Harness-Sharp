@@ -1,10 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Dsh.Runtime;
-using Dsh.Runtime.Events;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Llm;
-using Dsh.Agent;
+using Dsh.Runtime;
+using Dsh.Runtime.Events;
 
 namespace Dsh.Board;
 
@@ -18,7 +18,7 @@ public static class BoardTools
     private const string CoordinationContextName = "board:coordination";
 
     private const string CoordinationInstructions = """
-        You share a persistent board with the main session and the other agents in its delegation tree.
+        You share a persistent board with the main session and the other agents in its delegation tree (or an explicit `board_id` team board).
         Use the board for relevant peer coordination, not personal bookkeeping.
         Share material findings, questions, or blockers when they can affect another participant's decisions; include evidence with candidate results.
         Address posts to a specific participant id, "main" (the root session), or "ALL"; use HOLD/VETO only as advisory notes, never as commands.
@@ -34,7 +34,7 @@ public static class BoardTools
      * 转而用逐项汇报的 Let me 口吻工作。根会话要明确它是这棵委派树的 main。
      */
     private const string RootCoordinationInstructions = """
-        You are the main agent (the root of this delegation tree). The board is shared with any subagents you spawn.
+        You are the main agent (the root of this delegation tree). The board is shared with any subagents you spawn, or with peers via an explicit `board_id` team board.
         Use the board only for relevant peer coordination, not personal bookkeeping.
         Share material findings, questions, or blockers when they can affect a subagent's decisions; include evidence with candidate results.
         Address posts to a specific participant id or "ALL"; use HOLD/VETO only as advisory notes, never as commands.
@@ -46,11 +46,11 @@ public static class BoardTools
         """;
 
     private const string PostDescription =
-        "Post a message to this delegation tree's shared board. Peer coordination only: material findings, "
+        "Post a message to this delegation tree's shared board (or an explicit `board_id` team board). Peer coordination only: material findings, "
         + "questions, blockers, candidate results. The full formatted message must fit within 4 KiB.";
 
     private const string ReadDescription =
-        "Read this delegation tree's shared board incrementally. Pass the cursor from your last read as `since`; "
+        "Read this delegation tree's shared board (or an explicit `board_id` team board) incrementally. Pass the cursor from your last read as `since`; "
         + "the result carries the next cursor, a hasMore flag, and the participant roster.";
 
     private const string NoticeText =
@@ -104,6 +104,7 @@ public static class BoardTools
                     ["type"] = "string",
                     ["description"] = "Board message id this post corrects or answers.",
                 },
+                ["board_id"] = BoardIdSchema(),
             },
         },
         Output = new ToolOutputDefinition(
@@ -122,16 +123,16 @@ public static class BoardTools
         Execute = (args, exec) =>
         {
             var agent = RequireAgent(exec, PostToolName);
-            var replyTo = args.TryGetProperty("reply_to", out var reply) && reply.ValueKind == JsonValueKind.String
-                ? reply.GetString()
-                : null;
+            var replyTo = OptionalString(args, "reply_to");
+            var boardId = OptionalString(args, "board_id");
             var message = board.Post(
                 agent,
                 args.GetProperty("to").GetString() ?? "",
                 BoardMessageKindWire.Parse(args.GetProperty("type").GetString() ?? ""),
                 args.GetProperty("body").GetString() ?? "",
                 replyTo,
-                exec.CallId.Value);
+                exec.CallId.Value,
+                boardId);
             return Task.FromResult<object?>(new JsonObject
             {
                 ["id"] = message.Id,
@@ -160,6 +161,7 @@ public static class BoardTools
                     ["type"] = "integer",
                     ["description"] = $"Max messages to return (1-{SwarmBoard.MaxReadLimit}, default {SwarmBoard.DefaultReadLimit}).",
                 },
+                ["board_id"] = BoardIdSchema(),
             },
         },
         Output = new ToolOutputDefinition(
@@ -187,16 +189,18 @@ public static class BoardTools
             var limit = args.TryGetProperty("limit", out var limitValue) && limitValue.ValueKind == JsonValueKind.Number
                 ? limitValue.GetInt32()
                 : SwarmBoard.DefaultReadLimit;
-            var page = board.Read(agent, since, limit);
+            var boardId = OptionalString(args, "board_id");
+            SessionId? rootAlias = string.IsNullOrWhiteSpace(boardId) ? board.RootOf(agent) : null;
+            var page = board.Read(agent, since, limit, boardId);
             var messages = new JsonArray();
             foreach (var message in page.Messages)
-                messages.Add(SerializeMessage(message, board.RootOf(agent)));
+                messages.Add(SerializeMessage(message, rootAlias));
             var participants = new JsonArray();
-            foreach (var participant in board.Roster(agent))
-                participants.Add(participant == board.RootOf(agent) ? "main" : participant.Value);
+            foreach (var participant in board.Roster(agent, boardId))
+                participants.Add(rootAlias is { } root && participant == root ? "main" : participant.Value);
             var claims = new JsonArray();
-            foreach (var claim in board.Claims(agent))
-                claims.Add(SerializeClaim(claim, board.RootOf(agent)));
+            foreach (var claim in board.Claims(agent, boardId))
+                claims.Add(SerializeClaim(claim, rootAlias));
             return Task.FromResult<object?>(new JsonObject
             {
                 ["messages"] = messages,
@@ -229,6 +233,7 @@ public static class BoardTools
                     ["type"] = "integer",
                     ["description"] = $"Seconds until auto-release (1-{SwarmBoard.MaxClaimTtlSeconds}, default {SwarmBoard.DefaultClaimTtlSeconds}).",
                 },
+                ["board_id"] = BoardIdSchema(),
             },
         },
         Output = new ToolOutputDefinition(
@@ -251,16 +256,19 @@ public static class BoardTools
             var ttl = args.TryGetProperty("ttl", out var ttlValue) && ttlValue.ValueKind == JsonValueKind.Number
                 ? ttlValue.GetInt32()
                 : (int?)null;
+            var boardId = OptionalString(args, "board_id");
+            SessionId? rootAlias = string.IsNullOrWhiteSpace(boardId) ? board.RootOf(agent) : null;
             var (claim, conflicts) = board.Claim(
                 agent,
                 args.GetProperty("path").GetString() ?? "",
                 args.GetProperty("start_line").GetInt32(),
                 args.GetProperty("end_line").GetInt32(),
                 args.GetProperty("intent").GetString() ?? "",
-                ttl);
+                ttl,
+                boardId);
             var conflictRows = new JsonArray();
             foreach (var conflict in conflicts)
-                conflictRows.Add(SerializeClaim(conflict, board.RootOf(agent)));
+                conflictRows.Add(SerializeClaim(conflict, rootAlias));
             return Task.FromResult<object?>(new JsonObject
             {
                 ["claim_id"] = claim.Id,
@@ -282,6 +290,7 @@ public static class BoardTools
             {
                 ["claim_id"] = new JsonObject { ["type"] = "string" },
                 ["path"] = new JsonObject { ["type"] = "string" },
+                ["board_id"] = BoardIdSchema(),
             },
         },
         Output = new ToolOutputDefinition(
@@ -299,19 +308,31 @@ public static class BoardTools
         Execute = (args, exec) =>
         {
             var agent = RequireAgent(exec, ReleaseToolName);
-            var claimId = args.TryGetProperty("claim_id", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
-            var path = args.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+            var claimId = OptionalString(args, "claim_id");
+            var path = OptionalString(args, "path");
+            var boardId = OptionalString(args, "board_id");
             if (claimId is null && path is null)
                 throw new InvalidOperationException($"{ReleaseToolName} requires claim_id or path");
-            return Task.FromResult<object?>(new JsonObject { ["released"] = board.Release(agent, claimId, path) });
+            return Task.FromResult<object?>(new JsonObject { ["released"] = board.Release(agent, claimId, path, boardId) });
         },
     };
 
-    private static JsonObject SerializeClaim(BoardClaim claim, SessionId root)
+    private static JsonObject BoardIdSchema() => new()
+    {
+        ["type"] = "string",
+        ["description"] = "Optional explicit team or room board id; omit to use this delegation tree's default board.",
+    };
+
+    private static string? OptionalString(JsonElement args, string name)
+        => args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static JsonObject SerializeClaim(BoardClaim claim, SessionId? root)
         => new()
         {
             ["claim_id"] = claim.Id,
-            ["owner"] = claim.Owner == root ? "main" : claim.Owner.Value,
+            ["owner"] = root is { } r && claim.Owner == r ? "main" : claim.Owner.Value,
             ["path"] = claim.Path,
             ["start_line"] = claim.StartLine,
             ["end_line"] = claim.EndLine,
@@ -323,21 +344,23 @@ public static class BoardTools
     {
         var lines = new List<string> { $"Claimed {value.GetProperty("claim_id").GetString()}." };
         foreach (var conflict in value.GetProperty("conflicts").EnumerateArray())
+        {
             lines.Add($"CONFLICT: {conflict.GetProperty("owner").GetString()} holds "
                 + $"{conflict.GetProperty("path").GetString()}:{conflict.GetProperty("start_line").GetInt64()}-{conflict.GetProperty("end_line").GetInt64()} "
                 + $"({conflict.GetProperty("intent").GetString()})");
+        }
         return [new TextBlock(string.Join("\n", lines))];
     }
 
-    private static JsonObject SerializeMessage(BoardMessage message, SessionId root)
+    private static JsonObject SerializeMessage(BoardMessage message, SessionId? root)
     {
         var row = new JsonObject
         {
             ["id"] = message.Id,
             ["seq"] = message.Seq,
             ["timestamp"] = message.Timestamp,
-            ["from"] = message.From == root ? "main" : message.From.Value,
-            ["to"] = message.To == root.Value ? "main" : message.To,
+            ["from"] = root is { } r && message.From == r ? "main" : message.From.Value,
+            ["to"] = root is { } r2 && message.To == r2.Value ? "main" : message.To,
             ["type"] = BoardMessageKindWire.Of(message.Kind),
             ["body"] = message.Body,
         };
@@ -369,7 +392,7 @@ public static class BoardTools
     /** 通知搭便车：任一工具结果返回前比较该 agent 的看板水位，有新收件就在结果尾部追加提示。 */
     private sealed class BoardNotifier : IDisposable
     {
-        private readonly Dictionary<SessionId, long> _cursors = [];
+        private readonly Dictionary<(SessionId AgentId, string BoardKey), long> _cursors = [];
         private readonly Func<bool> _unsubscribe;
 
         private BoardNotifier(Context ctx, SwarmBoard board)
@@ -381,13 +404,26 @@ public static class BoardTools
                     return decision;
                 if (notification.Run.Agent is not { } agent)
                     return decision;
-                var seen = _cursors.GetValueOrDefault(agent.Id);
-                var latest = board.Activity(agent, seen);
-                if (latest <= seen)
+
+                var changed = CheckBoard(board, agent, boardId: null);
+                foreach (var explicitBoardId in board.JoinedBoardsOf(agent.Id))
+                    changed |= CheckBoard(board, agent, explicitBoardId);
+                if (!changed)
                     return decision;
-                _cursors[agent.Id] = latest;
+
                 return new PostToolDecision.Accept(Content: [.. notification.Result.Content, new TextBlock(NoticeText)]);
             }, new EventOptions { Global = true });
+        }
+
+        private bool CheckBoard(SwarmBoard board, IAgent agent, string? boardId)
+        {
+            var key = (agent.Id, boardId ?? "");
+            var seen = _cursors.GetValueOrDefault(key);
+            var latest = board.Activity(agent, seen, boardId);
+            if (latest <= seen)
+                return false;
+            _cursors[key] = latest;
+            return true;
         }
 
         public static IDisposable Attach(Context ctx, SwarmBoard board) => new BoardNotifier(ctx, board);

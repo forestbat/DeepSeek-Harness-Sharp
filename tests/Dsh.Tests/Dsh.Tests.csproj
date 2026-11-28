@@ -98,6 +98,8 @@
     <ProjectReference Include="..\..\src\Dsh.Deliverables\Dsh.Deliverables.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Mcp\Dsh.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Collab\Dsh.Collab.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Channels\Dsh.Channels.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Ptc\Dsh.Ptc.csproj" />

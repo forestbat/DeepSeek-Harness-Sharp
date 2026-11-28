@@ -92,6 +92,41 @@ internal static class BrowserProtocol
         {
             [nameof(NotificationsProtocol.MethodNotifyMarkRead)] = NotificationsProtocol.MethodNotifyMarkRead,
         });
+        Export(script, "MeshProtocol", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [nameof(MeshProtocol.CapabilityMesh)] = MeshProtocol.CapabilityMesh,
+            [nameof(MeshProtocol.CapabilityRooms)] = MeshProtocol.CapabilityRooms,
+            [nameof(MeshProtocol.CapabilityDiscovery)] = MeshProtocol.CapabilityDiscovery,
+            [nameof(MeshProtocol.CapabilityChannels)] = MeshProtocol.CapabilityChannels,
+            [nameof(MeshProtocol.MethodAgentsList)] = MeshProtocol.MethodAgentsList,
+            [nameof(MeshProtocol.MethodAgentsCreate)] = MeshProtocol.MethodAgentsCreate,
+            [nameof(MeshProtocol.MethodAgentsWake)] = MeshProtocol.MethodAgentsWake,
+            [nameof(MeshProtocol.MethodAgentsSuspend)] = MeshProtocol.MethodAgentsSuspend,
+            [nameof(MeshProtocol.MethodAgentsSend)] = MeshProtocol.MethodAgentsSend,
+            [nameof(MeshProtocol.MethodTargetsList)] = MeshProtocol.MethodTargetsList,
+            [nameof(MeshProtocol.MethodRoomsList)] = MeshProtocol.MethodRoomsList,
+            [nameof(MeshProtocol.MethodRoomsCreate)] = MeshProtocol.MethodRoomsCreate,
+            [nameof(MeshProtocol.MethodRoomsInvite)] = MeshProtocol.MethodRoomsInvite,
+            [nameof(MeshProtocol.MethodRoomsJoin)] = MeshProtocol.MethodRoomsJoin,
+            [nameof(MeshProtocol.MethodRoomsPost)] = MeshProtocol.MethodRoomsPost,
+            [nameof(MeshProtocol.MethodRoomsMessages)] = MeshProtocol.MethodRoomsMessages,
+            [nameof(MeshProtocol.MethodDiscoveryList)] = MeshProtocol.MethodDiscoveryList,
+            [nameof(MeshProtocol.MethodDiscoveryTrust)] = MeshProtocol.MethodDiscoveryTrust,
+            [nameof(MeshProtocol.MethodDiscoveryRevoke)] = MeshProtocol.MethodDiscoveryRevoke,
+            [nameof(MeshProtocol.MethodDiscoveryTrustList)] = MeshProtocol.MethodDiscoveryTrustList,
+            [nameof(MeshProtocol.MethodChannelsList)] = MeshProtocol.MethodChannelsList,
+            [nameof(MeshProtocol.MethodChannelsBind)] = MeshProtocol.MethodChannelsBind,
+            [nameof(MeshProtocol.MethodChannelsTriggers)] = MeshProtocol.MethodChannelsTriggers,
+            [nameof(MeshProtocol.NotificationMeshChanged)] = MeshProtocol.NotificationMeshChanged,
+        });
+        ExportEnumNames<AgentLifecycleState>(script, "AgentLifecycleState");
+        ExportEnumNames<AgentBackendKind>(script, "AgentBackendKind");
+        ExportEnumNames<PrincipalKind>(script, "PrincipalKind");
+        ExportEnumNames<MessageTrustLevel>(script, "MessageTrustLevel");
+        ExportEnumNames<AgentMessageIntent>(script, "AgentMessageIntent");
+        ExportEnumNames<AgentDeliveryStatus>(script, "AgentDeliveryStatus");
+        ExportEnumNames<RoomRole>(script, "RoomRole");
+        ExportEnumNames<AgentTrustStatus>(script, "AgentTrustStatus");
         Export(script, "BridgeProtocol", new Dictionary<string, string>
         {
             [nameof(BridgeProtocol.NotificationView)] = BridgeProtocol.NotificationView,
@@ -161,6 +196,9 @@ internal static class BrowserProtocol
     private static void ExportEnum<T>(StringBuilder script, string name, JsonTypeInfo<T> metadata) where T : struct, Enum
         => Export(script, name, Enum.GetValues<T>().ToDictionary(value => value.ToString(),
             value => JsonSerializer.SerializeToElement(value, metadata).GetString()!, StringComparer.Ordinal));
+
+    private static void ExportEnumNames<T>(StringBuilder script, string name) where T : struct, Enum
+        => Export(script, name, Enum.GetNames<T>().ToDictionary(value => value, value => value, StringComparer.Ordinal));
 }
 
 internal sealed record BrowserRpcProtocol(string Version, int MethodNotFound);

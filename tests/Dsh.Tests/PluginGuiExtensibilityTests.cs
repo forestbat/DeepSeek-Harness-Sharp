@@ -329,12 +329,12 @@ public sealed class PluginGuiExtensibilityTests
                 Assert.False(viewModel.Workbench.HasChatBanners);
                 Assert.False(viewModel.Workbench.HasStatusItems);
                 Assert.False(viewModel.Workbench.HasSettingsPanels);
-                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines], viewModel.Workspace.Pages.Available.Select(page => page.Id));
+                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, WorkspacePages.Mesh], viewModel.Workspace.Pages.Available.Select(page => page.Id));
 
                 await InstallViaMarketAsync(window, dllPath, "@test/gui-partial");
                 Render(window);
 
-                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, "plugin-inspector"], viewModel.Workspace.Pages.Available.Select(page => page.Id));
+                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, WorkspacePages.Mesh, "plugin-inspector"], viewModel.Workspace.Pages.Available.Select(page => page.Id));
                 Assert.True(viewModel.Workbench.HasToolbarItems);
 
                 var toolbarButton = FindControlByText<Button>(window.FindControl<ItemsControl>("PluginToolbarHost")!, "toolbar:v1-banner");
@@ -454,6 +454,8 @@ public sealed class PluginGuiExtensibilityTests
                 ExecuteButton(reloadButton);
                 await viewModel.Preferences.PluginActionCommand.ExecutionTask!;
                 Render(window);
+                Assert.Contains("reloaded", viewModel.Preferences.Status, StringComparison.Ordinal);
+                Assert.Contains("plugin @test/gui-reload activated", viewModel.Preferences.Status, StringComparison.Ordinal);
 
                 Assert.Equal("", viewModel.Preferences.PluginInput);
                 viewModel.ShowChatCommand.Execute(null);
@@ -677,6 +679,7 @@ public sealed class PluginGuiExtensibilityTests
         await viewModel.Preferences.AddPluginCommand.ExecuteAsync(null);
         await GuiTestEnvironment.WaitForAsync(viewModel.Preferences.Plugins,
             () => viewModel.Preferences.Plugins.Any(row => row.Package == package && row.Enabled));
+        Render(window);
     }
 
     private static IReadOnlyList<Button> MarketRowButtons(Window window, string package)

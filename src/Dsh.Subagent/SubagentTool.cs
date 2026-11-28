@@ -136,6 +136,16 @@ public static class SubagentTool
                 ["description"] = "The prompt for the subagent. The subagent does not have any of your conversation history, "
                     + "so include all necessary information and context in the prompt.",
             },
+            ["target"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["description"] = "Optional execution target id (e.g. \"fleet:machine\", \"ma2a:endpoint:agent\", \"a2a:remote\", or \"local\").",
+            },
+            ["backend"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["description"] = "Optional execution backend kind (Local, Fleet, Ma2a, A2a, Acp, Plugin).",
+            },
         };
         if (config.EnableRunInBackground)
         {
@@ -224,16 +234,21 @@ public static class SubagentTool
     {
         var parent = exec.Agent
             ?? throw new InvalidOperationException("subagent tool requires a calling agent (exec.agent was undefined)");
+        var target = OptionalStringField(args, "target");
+        var backend = ParseBackend(OptionalStringField(args, "backend"));
+        var isRemote = (!string.IsNullOrWhiteSpace(target) && !string.Equals(target, "local", StringComparison.OrdinalIgnoreCase))
+            || (backend is not null && backend != AgentBackendKind.Local);
+
         var parentOptions = ChildCompositionSupport.ParentAgentOptionsForDelegation(parent);
         var agentOptions = RequestedAgentOptions(parentOptions, config.AgentOptions, args);
-        if (!ReferenceEquals(agentOptions, config.AgentOptions) && !provider.Capabilities.AgentOptions)
+        if (!isRemote && !ReferenceEquals(agentOptions, config.AgentOptions) && !provider.Capabilities.AgentOptions)
             throw new InvalidOperationException($"subagent provider \"{config.Provider}\" does not support child model selection");
         var configuredRoute = config.AgentOptions is { Provider: not null } configured
             && agentOptions?.Provider == configured.Provider && agentOptions.Model == configured.Model;
-        if (HasConfiguredLlmSelection(agentOptions))
+        if (!isRemote && HasConfiguredLlmSelection(agentOptions))
             await PreflightChildLlmRoute(ctx, parentOptions, agentOptions, configuredRoute, exec.Signal);
         var subagents = ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!;
-        if (!ReferenceEquals(subagents.GetProvider(config.Provider), provider))
+        if (!isRemote && !ReferenceEquals(subagents.GetProvider(config.Provider), provider))
         {
             throw new InvalidOperationException(
                 $"subagent provider \"{config.Provider}\" changed during delegation; retry the call");
@@ -252,8 +267,27 @@ public static class SubagentTool
             MaxDepth = config.MaxDepth,
         };
         if (!ResolveRunInBackground(args, config))
-            return await SettleForegroundRun(await subagents.StartAsync(config.Provider, request));
-        return await StartBackgroundRun(ctx, parent, subagents, config.Provider, request with { Background = true });
+        {
+            var run = isRemote
+                ? await subagents.StartAsync(config.Provider, request, target, backend)
+                : await subagents.StartAsync(config.Provider, request);
+            return await SettleForegroundRun(run);
+        }
+        return await StartBackgroundRun(ctx, parent, subagents, config.Provider, request with { Background = true }, target, backend, isRemote);
+    }
+
+    private static string? OptionalStringField(JsonElement args, string name)
+        => args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static AgentBackendKind? ParseBackend(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        return Enum.TryParse<AgentBackendKind>(raw, ignoreCase: true, out var kind)
+            ? kind
+            : throw new InvalidOperationException($"unknown subagent backend \"{raw}\"");
     }
 
     private static bool ResolveRunInBackground(JsonElement args, SubagentToolConfig config)
@@ -344,9 +378,14 @@ public static class SubagentTool
         IAgent parent,
         SubagentRuntime subagents,
         string provider,
-        SubagentStartRequest request)
+        SubagentStartRequest request,
+        string? target = null,
+        AgentBackendKind? backend = null,
+        bool isRemote = false)
     {
-        var run = await subagents.StartAsync(provider, request);
+        var run = isRemote
+            ? await subagents.StartAsync(provider, request, target, backend)
+            : await subagents.StartAsync(provider, request);
         var dispatch = BackgroundRunDispatch.Start(ctx, parent, subagents, run, request.Label ?? "subagent task");
         var value = new JsonObject
         {

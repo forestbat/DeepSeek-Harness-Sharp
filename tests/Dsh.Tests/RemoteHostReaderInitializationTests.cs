@@ -237,6 +237,8 @@ public sealed class RemoteHostReaderInitializationTests
 
         public Task NotifyChangedAsync(RemoteNotificationChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
+        public Task MeshChangedAsync(RemoteMeshChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         /** client.ide.* 两条反向方法按线协议名登记。 */
         public (string Method, Delegate Handler)[] Methods() =>
         [

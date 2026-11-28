@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Dsh.AgentAdapters;
+using Dsh.Core;
 using Dsh.GitInspect;
+using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
 
@@ -89,6 +91,28 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
     }
 
     public void Prompt(string sessionId, string text) => Live(sessionId).Prompt(text);
+
+    public AcpAgentSession? TryGetSession(string sessionId)
+        => _live.TryGetValue(sessionId, out var session) ? session : null;
+
+    public Task WaitTurnAsync(string sessionId, CancellationToken cancellationToken = default)
+        => TryGetSession(sessionId)?.WaitTurnAsync(cancellationToken) ?? Task.CompletedTask;
+
+    public IReadOnlyList<SessionEvent>? TryReadTranscriptEvents(string sessionId)
+    {
+        if (TryGetSession(sessionId) is { } live)
+            return live.TranscriptSession.SnapshotEvents();
+        var id = SessionId.Create(sessionId);
+        if (_ctx.Get<SessionStore>(SessionStore.ServiceName, false)?.Get(id) is { } stored)
+            return stored.SnapshotEvents();
+        var persistence = _ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
+        if (persistence?.Stat(id) is not null)
+        {
+            using var handle = persistence.Open(id, SessionAccess.Read);
+            return handle.Read();
+        }
+        return null;
+    }
 
     public Task CancelAsync(string sessionId, CancellationToken cancellationToken) => Live(sessionId).CancelAsync(cancellationToken);
 

@@ -279,6 +279,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         Pages.RegisterDefault(2, new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => _machinesPage ??= new(Machines)));
     }
 
+    /** Registers the 0.5.0 Agent Mesh workbench page in the workspace sidebar. */
+    public void RegisterMeshPage(Geometry meshIcon)
+    {
+        Pages.RegisterDefault(3, new WorkspacePageEntry(WorkspacePages.Mesh, "智能体网络", meshIcon, _ => new AgentMeshViewModel(Fleet)));
+    }
+
     /** Opens the new-session form, preset to a machine and project when started from one. */
     public void NewSession(string? machine, string? projectPath)
     {

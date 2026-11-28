@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Dsh.Core;
 using Dsh.GitInspect;
 using StreamJsonRpc;
 using PolyType;
@@ -267,4 +268,69 @@ public partial interface IHostPush
 
     [JsonRpcMethod(PtyProtocol.NotificationPtyOutput)]
     Task PtyOutputAsync(RemotePtyFrame frame, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.NotificationMeshChanged)]
+    Task MeshChangedAsync(RemoteMeshChange change, CancellationToken cancellationToken = default);
+}
+
+/** 0.5.0 通用 Agent 基础设施域：持久化 Agent、统一执行目标、多人协作房间、发现与外部通道。 */
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IMeshRpc
+{
+    [JsonRpcMethod(MeshProtocol.MethodAgentsList)]
+    Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodAgentsCreate)]
+    Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodAgentsWake)]
+    Task<AgentProfile> WakeAgentAsync(RemoteMeshAgentRef request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodAgentsSuspend)]
+    Task<bool> SuspendAgentAsync(RemoteMeshAgentRef request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodAgentsSend)]
+    Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodTargetsList)]
+    Task<IReadOnlyList<RemoteExecutionTarget>> ListTargetsAsync(CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodRoomsList)]
+    Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodRoomsCreate)]
+    Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodRoomsInvite)]
+    Task<RoomInvite> CreateInviteAsync(RemoteRoomInviteRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodRoomsJoin)]
+    Task<CollaborationRoom> JoinRoomAsync(RemoteRoomJoinRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodRoomsPost)]
+    Task<RoomMessage> PostRoomMessageAsync(RemoteRoomPostRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodRoomsMessages)]
+    Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodDiscoveryList)]
+    Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request = null, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodDiscoveryTrust)]
+    Task<AgentTrustRecord> GrantTrustAsync(RemoteTrustGrantRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodDiscoveryRevoke)]
+    Task<AgentTrustRecord> RevokeTrustAsync(RemoteTrustRevokeRequest request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodDiscoveryTrustList)]
+    Task<IReadOnlyList<AgentTrustRecord>> ListTrustAsync(CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodChannelsList)]
+    Task<IReadOnlyList<ChannelBinding>> ListChannelsAsync(CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodChannelsBind)]
+    Task<ChannelBinding> BindChannelAsync(ChannelBinding request, CancellationToken cancellationToken = default);
+
+    [JsonRpcMethod(MeshProtocol.MethodChannelsTriggers)]
+    Task<IReadOnlyList<AutomationTriggerRule>> ListTriggersAsync(CancellationToken cancellationToken = default);
 }

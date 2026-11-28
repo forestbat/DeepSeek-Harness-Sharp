@@ -191,6 +191,7 @@ public static class SessionEventTypes
     public const string RequestContext = "request/context";
     public const string SessionEndSeed = "session/end-seed";
     public const string AgentInboxSpliced = "agent/inbox/spliced";
+    public const string AgentEnvelope = "agent/envelope";
     public const string WorkingDirectoryChange = "working-directory/change";
     /** 回退: 只追加的事件, 表面上把 TargetSeq 之后的内容收掉(见 SessionRevertPayload)。 */
     public const string SessionRevert = SessionRevertPayload.EventType;
@@ -212,7 +213,15 @@ public sealed record InboxSplicePayload(
     long Start,
     long? RemovedCount,
     IReadOnlyList<UserMessage> Inserted,
-    string? Outcome = null) : SessionEventPayload
+    string? Outcome = null,
+    IReadOnlyDictionary<string, MessageAttribution>? Attributions = null) : SessionEventPayload
 {
     public override string Type => SessionEventTypes.AgentInboxSpliced;
+}
+
+public sealed record AgentEnvelopePayload(
+    AgentEnvelope Envelope,
+    AgentDeliveryStatus Status) : SessionEventPayload
+{
+    public override string Type => SessionEventTypes.AgentEnvelope;
 }

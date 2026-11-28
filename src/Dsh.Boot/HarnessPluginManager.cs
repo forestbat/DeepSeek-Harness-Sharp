@@ -8,6 +8,10 @@ namespace Dsh.Boot;
 
 public sealed class HarnessPluginManager : IDisposable
 {
+    private const int CollectionGcRounds = 60;
+    private const int FileRetryAttempts = 15;
+    private const int FileRetryDelayMs = 25;
+
     private readonly PluginHost _host;
     private readonly Composition _composition;
     private readonly HarnessHome _home;
@@ -130,7 +134,7 @@ public sealed class HarnessPluginManager : IDisposable
         if (domain.Any(HasLeakedPackage))
             return message;
         _artifactPaths.Remove(trimmed);
-        var uninstall = UninstallInstalled(trimmed);
+        var uninstall = await UninstallInstalledAsync(trimmed);
         return uninstall is null ? message : $"{message}; {uninstall}";
     }
 
@@ -147,22 +151,31 @@ public sealed class HarnessPluginManager : IDisposable
         return Removed(package, leaked);
     }
 
-    private string? UninstallInstalled(string package)
+    private async Task<string?> UninstallInstalledAsync(string package)
     {
         if (!_installedDirectories.Remove(package, out var directory))
             return null;
         // A deployment can contain multiple packages. Removing one must not delete its siblings' files.
         if (_installedDirectories.Values.Contains(directory, StringComparer.Ordinal))
             return "installation directory retained for other packages";
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            PluginInstall.Uninstall(directory, _pluginsDirectory);
-            return $"已删除安装目录 {directory}";
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            _installedDirectories[package] = directory;
-            return $"删除安装目录失败: {directory}: {error.Message}";
+            try
+            {
+                PluginInstall.Uninstall(directory, _pluginsDirectory);
+                return $"已删除安装目录 {directory}";
+            }
+            catch (Exception error) when (attempt + 1 < FileRetryAttempts && error is IOException or UnauthorizedAccessException)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                GC.WaitForPendingFinalizers();
+                await Task.Delay(FileRetryDelayMs);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                _installedDirectories[package] = directory;
+                return $"删除安装目录失败: {directory}: {error.Message}";
+            }
         }
     }
 
@@ -401,7 +414,7 @@ public sealed class HarnessPluginManager : IDisposable
             return unloaded;
         signal.ThrowIfCancellationRequested();
         var targetArtifact = sourcePath.Path is not null
-            ? InstallReloadArtifact(trimmed, sourcePath.Path, previousDirectory)
+            ? await InstallReloadArtifactAsync(trimmed, sourcePath.Path, previousDirectory)
             : (Path: existingArtifact, Error: (string?)null);
         if (targetArtifact.Error is not null)
             return targetArtifact.Error;
@@ -458,14 +471,28 @@ public sealed class HarnessPluginManager : IDisposable
         return collected ? null : retained;
     }
 
-    private (string? Path, string? Error) InstallReloadArtifact(string package, string sourcePath, string? previousDirectory)
+    private async Task<(string? Path, string? Error)> InstallReloadArtifactAsync(string package, string sourcePath, string? previousDirectory)
     {
         try
         {
-            var installed = PluginInstall.Install(sourcePath, _pluginsDirectory, overwrite: true);
+            string installed;
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    installed = PluginInstall.Install(sourcePath, _pluginsDirectory, overwrite: true);
+                    break;
+                }
+                catch (Exception error) when (attempt + 1 < FileRetryAttempts && error is IOException or UnauthorizedAccessException)
+                {
+                    GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                    GC.WaitForPendingFinalizers();
+                    await Task.Delay(FileRetryDelayMs);
+                }
+            }
             var directory = Path.GetDirectoryName(installed)!;
             if (previousDirectory is not null && !PathsEqual(previousDirectory, directory))
-                UninstallInstalled(package);
+                await UninstallInstalledAsync(package);
             _installedDirectories[package] = directory;
             return (installed, null);
         }
@@ -823,7 +850,7 @@ public sealed class HarnessPluginManager : IDisposable
     {
         var (collected, report) = await Task.Run(() =>
         {
-            var success = PluginUnloader.WaitForCollection(weak, out var detail);
+            var success = PluginUnloader.WaitForCollection(weak, out var detail, maxRounds: CollectionGcRounds);
             return (success, detail);
         });
         if (collected)

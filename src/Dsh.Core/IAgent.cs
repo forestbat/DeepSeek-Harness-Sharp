@@ -6,6 +6,7 @@ namespace Dsh.Core;
 public interface IAgent
 {
     SessionId Id { get; }
+    AgentId AgentId => AgentId.FromSession(Id);
     Session Session { get; }
     ScopeKey ScopeKey { get; }
     Context Ctx { get; }

@@ -29,22 +29,32 @@ public sealed class ScheduleService : Service, IDisposable
     private readonly Lock _gate = new();
     private readonly Dictionary<Session, Arming> _armed = [];
     private readonly IReadOnlyList<Func<bool>> _subscriptions;
+    private readonly ITimer _indexTimer;
+    private readonly SemaphoreSlim _wakeGate = new(1, 1);
+    private bool _disposed;
 
     static ScheduleService() => ScheduleChangePayload.RegisterCodec();
 
-    public ScheduleService(Context ctx, TimeProvider? time = null) : base(ctx, ServiceName)
+    public ScheduleService(Context ctx, TimeProvider? time = null, string? wakeIndexPath = null) : base(ctx, ServiceName)
     {
         _time = time ?? TimeProvider.System;
+        var resolvedIndexPath = wakeIndexPath
+            ?? (DshPaths.FromContext(ctx) is { } paths ? Path.Combine(paths.Path("schedules"), "wake-index.json") : null);
+        WakeIndex = new ScheduleWakeIndex(resolvedIndexPath);
+        _indexTimer = _time.CreateTimer(_ => _ = FireDueIndexAsync(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         var global = new EventOptions { Global = true };
         _subscriptions =
         [
             ctx.On<AgentCreatedNotification>(notification => Arm(notification.Agent), global),
-            ctx.On<AgentDisposedNotification>(notification => Disarm(notification.Agent.Session), global),
+            ctx.On<AgentDisposedNotification>(notification => Disarm(notification.Agent), global),
 
         ];
         foreach (var agent in ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false)?.List() ?? [])
             Arm(agent);
+        RearmIndex();
     }
+
+    public ScheduleWakeIndex WakeIndex { get; }
 
     public DateTimeOffset Now => _time.GetUtcNow();
 
@@ -103,10 +113,13 @@ public sealed class ScheduleService : Service, IDisposable
             unsubscribe();
         lock (_gate)
         {
+            _disposed = true;
+            _indexTimer.Dispose();
             foreach (var arming in _armed.Values)
                 arming.Timer.Dispose();
             _armed.Clear();
         }
+        _wakeGate.Dispose();
     }
 
     private static string ValidTitle(string title)
@@ -149,13 +162,20 @@ public sealed class ScheduleService : Service, IDisposable
         }
     }
 
-    private void Disarm(Session session)
+    private void Disarm(IAgent agent)
     {
+        var keepWakeEntry = false;
         lock (_gate)
         {
-            if (_armed.Remove(session, out var arming))
+            if (_armed.Remove(agent.Session, out var arming))
                 arming.Timer.Dispose();
+            keepWakeEntry = ScheduleLedger.Of(agent.Session).Active.Count > 0
+                && CanWakeOffline(agent.AgentId, agent.Id);
+            if (!keepWakeEntry)
+                WakeIndex.Remove(agent.AgentId, agent.Id);
         }
+        if (keepWakeEntry)
+            RearmIndex();
     }
 
     private void Rearm(Session session)
@@ -165,10 +185,120 @@ public sealed class ScheduleService : Service, IDisposable
             if (!_armed.TryGetValue(session, out var arming))
                 return;
             var active = ScheduleLedger.Of(session).Active;
-            var delay = active.Count == 0
-                ? Timeout.InfiniteTimeSpan
-                : TimeSpan.FromTicks(Math.Clamp((active.Min(record => record.Rule.ScheduledAt) - Now).Ticks, 0, MaxTimerDelay.Ticks));
+            if (active.Count == 0)
+            {
+                WakeIndex.Remove(arming.Agent.AgentId, arming.Agent.Id);
+                arming.Timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                return;
+            }
+            var earliestAt = active.Min(record => record.Rule.ScheduledAt);
+            WakeIndex.Upsert(new ScheduleWakeEntry(
+                arming.Agent.AgentId,
+                arming.Agent.Id,
+                earliestAt.ToUnixTimeMilliseconds(),
+                session.WorkingDirectory ?? session.Header.Cwd));
+            var delay = TimeSpan.FromTicks(Math.Clamp((earliestAt - Now).Ticks, 0, MaxTimerDelay.Ticks));
             arming.Timer.Change(delay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private bool CanWakeOffline(AgentId agentId, SessionId sessionId)
+    {
+        if (Ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName, false)?.Get(agentId) is { State: not AgentLifecycleState.Disposed })
+            return true;
+        return Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false)?.Stat(sessionId) is not null;
+    }
+
+    private void RearmIndex()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+            var next = WakeIndex.List()
+                .FirstOrDefault(entry => agents?.Get(entry.SessionId) is null);
+            if (next is null)
+            {
+                _indexTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                return;
+            }
+            var dueAt = DateTimeOffset.FromUnixTimeMilliseconds(next.DueAtMs);
+            var delay = TimeSpan.FromTicks(Math.Clamp((dueAt - Now).Ticks, 0, MaxTimerDelay.Ticks));
+            _indexTimer.Change(delay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    internal async Task FireDueIndexAsync()
+    {
+        try
+        {
+            await _wakeGate.WaitAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+        try
+        {
+            if (_disposed)
+                return;
+            var dueEntries = WakeIndex.DueAt(Now.ToUnixTimeMilliseconds());
+            foreach (var entry in dueEntries)
+            {
+                if (_disposed)
+                    return;
+                var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+                if (agents?.Get(entry.SessionId) is not null)
+                    continue;
+
+                IAgent? woken = null;
+                try
+                {
+                    var manager = Ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName, false);
+                    var persistence = Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
+                    if (manager?.Get(entry.AgentId) is { State: not AgentLifecycleState.Disposed })
+                    {
+                        if (persistence is null || persistence.Stat(entry.SessionId) is not null)
+                            woken = await manager.WakeSessionAsync(entry.AgentId, entry.SessionId).ConfigureAwait(false);
+                        else
+                            WakeIndex.Remove(entry.AgentId, entry.SessionId);
+                    }
+                    else if (manager?.Get(entry.AgentId) is { State: AgentLifecycleState.Disposed })
+                    {
+                        WakeIndex.Remove(entry.AgentId, entry.SessionId);
+                    }
+                    else if (agents is not null && persistence?.Stat(entry.SessionId) is not null)
+                    {
+                        var resumed = await agents.Resume(new ResumeAgentOptions(entry.SessionId, AgentId: entry.AgentId))
+                            .ConfigureAwait(false);
+                        woken = resumed.Agent;
+                    }
+                    else
+                    {
+                        WakeIndex.Remove(entry.AgentId, entry.SessionId);
+                    }
+                }
+                catch (Exception error)
+                {
+                    Ctx.LoggerFor("schedules").Warn(
+                        $"failed to wake agent \"{entry.AgentId}\" for scheduled reminder: {error.Message}");
+                }
+
+                if (woken is not null && woken.Id == entry.SessionId)
+                    Fire(woken.Session);
+            }
+        }
+        finally
+        {
+            RearmIndex();
+            try
+            {
+                _wakeGate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
     }
 

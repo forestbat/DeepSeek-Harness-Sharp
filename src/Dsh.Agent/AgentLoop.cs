@@ -67,12 +67,13 @@ public sealed class AgentLoop : Service
                 Version = SessionHeader.SessionFormatVersion,
                 Id = sessionId,
                 CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                AgentId = options.AgentId,
                 Cwd = options.Cwd,
                 IsSeeded = options.Seed is not null,
                 AgentPreset = options.AgentPreset,
             },
             options.InheritedEventCount);
-        var agent = new AgentLoopAgent(owner, session.Id, options.AgentOptions ?? new AgentOptions(), session, SessionRepair.LastTurnOf);
+        var agent = new AgentLoopAgent(owner, session.Id, options.AgentOptions ?? new AgentOptions(), session, SessionRepair.LastTurnOf, options.AgentId);
         options.Setup?.Invoke(agent.Ctx);
         Ctx.Emit(new AgentSessionStartNotification(agent, "startup"));
         return Task.FromResult<IAgent>(agent);
@@ -88,7 +89,7 @@ public sealed class AgentLoop : Service
         var sessions = Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         // 与 Create 一致: 会话进入 store 后由 agent 生命周期持有, 不能在这里就解绑, 否则事件不再转发/落盘。
         sessions.Enter(session);
-        var agent = new AgentLoopAgent(owner, session.Id, options.AgentOptions ?? new AgentOptions(), session, SessionRepair.LastTurnOf);
+        var agent = new AgentLoopAgent(owner, session.Id, options.AgentOptions ?? new AgentOptions(), session, SessionRepair.LastTurnOf, options.AgentId ?? session.Header.AgentId);
         options.Setup?.Invoke(agent.Ctx);
         Ctx.Emit(new AgentSessionStartNotification(agent, "resume"));
         return Task.FromResult<IAgent>(agent);

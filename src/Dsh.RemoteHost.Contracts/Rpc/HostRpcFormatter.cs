@@ -23,7 +23,8 @@ public static class HostRpcFormatter
             NotificationsProtocolJsonContext.Default,
             PluginsProtocolJsonContext.Default,
             PtyProtocolJsonContext.Default,
-            SessionEditingProtocolJsonContext.Default);
+            SessionEditingProtocolJsonContext.Default,
+            MeshProtocolJsonContext.Default);
         return new SystemTextJsonFormatter
         {
             JsonSerializerOptions = new JsonSerializerOptions

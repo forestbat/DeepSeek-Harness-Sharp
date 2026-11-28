@@ -39,6 +39,7 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
         machine.NotificationsChanged += NotificationsChanged;
         Changed(machine);
         var view = PublishViewsAsync();
+        var mesh = FollowMeshAsync();
         try
         {
             var chunk = new byte[16 * 1024];
@@ -72,6 +73,8 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
             _connectionLifetime.CancelAfter(GracefulCloseTimeout);
             await _lifetime.CancelAsync().ConfigureAwait(false);
             try { await view.ConfigureAwait(false); }
+            catch (Exception error) when (IsConnectionEnd(error)) { }
+            try { await mesh.ConfigureAwait(false); }
             catch (Exception error) when (IsConnectionEnd(error)) { }
             await Task.WhenAll(_operations.Keys).ConfigureAwait(false);
             foreach (var (uploadId, lease) in _uploads)
@@ -108,6 +111,38 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
             var view = new WebMachineView(machine.State.ToString(), machine.Detail is { } detail ? redact(detail) : null,
                 machine.Hello, machine.Info, machine.Sessions, machine.Pending, machine.Notifications);
             await NotifyAsync(BridgeProtocol.NotificationView, view, WebBridgeJsonContext.Default.WebMachineView, _lifetime.Token).ConfigureAwait(false);
+        }
+    }
+
+    private async Task FollowMeshAsync()
+    {
+        while (!_lifetime.IsCancellationRequested)
+        {
+            WorkspaceHostLease lease;
+            try
+            {
+                lease = await ((IWorkspaceMachine)machine).WaitConnectedAsync(_lifetime.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, lease.Lifetime);
+            try
+            {
+                if (lease.Client.GetCapability<IWorkspaceMesh>() is { } mesh)
+                {
+                    await foreach (var change in mesh.MeshChangesAsync(linked.Token).ConfigureAwait(false))
+                        await NotifyAsync(MeshProtocol.NotificationMeshChanged, change, MeshProtocolJsonContext.Default.RemoteMeshChange, linked.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await Task.Delay(Timeout.Infinite, linked.Token).ConfigureAwait(false);
+                }
+            }
+            catch (Exception error) when (IsConnectionEnd(error) || error is JsonRpcException)
+            {
+            }
         }
     }
 

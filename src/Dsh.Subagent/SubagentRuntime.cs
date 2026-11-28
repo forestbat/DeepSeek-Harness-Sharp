@@ -1,8 +1,9 @@
-using Dsh.Runtime;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Runtime;
+using Dsh.Runtime.Events;
 using Dsh.Sdk;
-using Dsh.Agent;
 
 namespace Dsh.Subagent;
 
@@ -75,9 +76,18 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             return _liveRuns.GetValueOrDefault(id)?.LocalAgent;
     }
 
-    /** 控制面：中断存活的直系子 agent（任意档位）。未知或非直系 id 返回 false。 */
+    /** 控制面：中断存活的直系子 agent（任意档位或远端）。未知或非直系 id 返回 false。 */
     public bool CancelChild(SessionId parentId, SessionId childId)
     {
+        ISubagentRun? run;
+        lock (_sync)
+            run = _liveRuns.GetValueOrDefault(childId);
+        var unwrapped = run is ObservedRun observed ? observed.Inner : run;
+        if (unwrapped is RemoteSubagentRun remote && remote.ParentId == parentId)
+        {
+            remote.Cancel();
+            return true;
+        }
         if (GetLiveChild(parentId, childId) is not { } child)
             return false;
         child.Cancel(new AgentCancelCause.User());
@@ -93,15 +103,52 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
         {
             run = _liveRuns.GetValueOrDefault(childId);
             child = run?.LocalAgent;
-            if (child is null || child.Session.Header.ParentSession != parentId)
-                return false;
         }
+        var unwrapped = run is ObservedRun observed ? observed.Inner : run;
+        if (unwrapped is RemoteSubagentRun remote && remote.ParentId == parentId && !remote.Result.IsCompleted)
+        {
+            _ = remote.SendSteerAsync(PlainText(content));
+            return true;
+        }
+        if (child is null || child.Session.Header.ParentSession != parentId)
+            return false;
         if (run!.Result.IsCompleted)
             return false;
         // 换挡规则：注入是写操作，无头子代先升档（入 SessionStore，从此持久化与 UI 可见）；中断不算写操作，不升档。
         AttachChild(parentId, childId);
         child.Steer(MessageFactory.CreateUserMessage(content));
         return true;
+    }
+
+    /** 跨 agent 投递消息：支持直系子代、直接父会话、或同级/独立 peer AgentId/SessionId。 */
+    public async Task<bool> SendMessageAsync(
+        IAgent sender,
+        string target,
+        string? childId,
+        IReadOnlyList<ContentBlock> content,
+        AgentMessageIntent intent = AgentMessageIntent.Task,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.Equals(target, "child", StringComparison.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(childId))
+                throw new SubagentException("send_message with target \"child\" requires childId", SubagentErrorCodes.NoProvider);
+            if (!InjectChild(sender.Id, SessionId.Create(childId), content))
+            {
+                throw new SubagentException(
+                    $"child subagent \"{childId}\" is not live (already finished or unknown)",
+                    SubagentErrorCodes.ContinuationUnavailable);
+            }
+            return true;
+        }
+
+        if (string.Equals(target, "parent", StringComparison.Ordinal))
+            return await SendToParentAsync(sender, content, intent, cancellationToken).ConfigureAwait(false);
+
+        var peerId = string.Equals(target, "peer", StringComparison.Ordinal) ? childId : target;
+        if (string.IsNullOrWhiteSpace(peerId))
+            throw new SubagentException("send_message requires a target agent or session id", SubagentErrorCodes.NoProvider);
+        return await SendToPeerAsync(sender, peerId, content, intent, cancellationToken).ConfigureAwait(false);
     }
 
     /** 升档：把纯内存的无头子会话接入 SessionStore（Announce 触发持久化全量回填）。已在店内的子代为 no-op。 */
@@ -116,15 +163,6 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
         return true;
     }
 
-    private IAgent? GetLiveChild(SessionId parentId, SessionId childId)
-    {
-        lock (_sync)
-        {
-            var child = _liveRuns.GetValueOrDefault(childId)?.LocalAgent;
-            return child is not null && child.Session.Header.ParentSession == parentId ? child : null;
-        }
-    }
-
     public async Task<ISubagentRun> StartAsync(string name, SubagentStartRequest request)
     {
         var provider = ExpectProvider(name);
@@ -134,7 +172,186 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             AssertObjectSchema(schema);
         var resolved = new ResolvedSubagentStartRequest(
             request, SubagentDescriptorPayload.OneShot(name, request.Label));
-        return ObserveRun(name, request.Parent, await provider.StartAsync(resolved));
+        return ObserveRun(name, request.Parent, await provider.StartAsync(resolved).ConfigureAwait(false));
+    }
+
+    public Task<ISubagentRun> StartAsync(
+        string name,
+        SubagentStartRequest request,
+        string? targetId,
+        AgentBackendKind? backend = null)
+    {
+        var isLocalTarget = (string.IsNullOrWhiteSpace(targetId) || string.Equals(targetId, "local", StringComparison.OrdinalIgnoreCase))
+            && (backend is null || backend == AgentBackendKind.Local);
+        if (isLocalTarget)
+            return StartAsync(name, request);
+
+        DelegationDepth.AssertSubagentMaxDepth(request.MaxDepth);
+        _ = DelegationDepth.ResolveChildDepth(request.Parent, request.MaxDepth);
+        if (request.ToolFilter is not null)
+        {
+            throw new SubagentException(
+                "remote subagent execution does not support toolFilter",
+                SubagentErrorCodes.UnsupportedCapability);
+        }
+        if (request.OutputSchema is not null)
+        {
+            throw new SubagentException(
+                "remote subagent execution does not support structured output (outputSchema)",
+                SubagentErrorCodes.UnsupportedCapability);
+        }
+        var router = Ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName, false)
+            ?? throw new SubagentException(
+                "remote subagent execution requires the agentExecutionRouter service",
+                SubagentErrorCodes.NoProvider);
+        var remote = new RemoteSubagentRun(router, request, targetId, backend);
+        return Task.FromResult(ObserveRun(name, request.Parent, remote));
+    }
+
+    private async Task<bool> SendToParentAsync(
+        IAgent sender,
+        IReadOnlyList<ContentBlock> content,
+        AgentMessageIntent intent,
+        CancellationToken cancellationToken)
+    {
+        var parentSessionId = sender.Session.Header.ParentSession
+            ?? throw new SubagentException("current session has no parent session", SubagentErrorCodes.ContinuationUnavailable);
+        var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+        var parentAgent = agents?.Get(parentSessionId);
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
+        var text = PlainText(content);
+
+        if (bus is not null)
+        {
+            var trust = AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent
+                ? MessageTrustLevel.ExternalAgent
+                : MessageTrustLevel.TrustedPeerAgent;
+            var targetAgentId = parentAgent?.AgentId ?? AgentId.FromSession(parentSessionId);
+            var envelope = new AgentEnvelope(
+                EnvelopeId: $"subagent-parent-{Guid.NewGuid():N}",
+                TargetAgentId: targetAgentId,
+                TargetSessionId: parentSessionId,
+                Sender: new MessagePrincipal(
+                    PrincipalKind.Agent,
+                    sender.AgentId.Value,
+                    sender.Session.Header.SubagentLabel ?? sender.Id.Value),
+                TrustLevel: trust,
+                Intent: intent == AgentMessageIntent.Control ? AgentMessageIntent.Task : intent,
+                Body: text,
+                CreatedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                WakeIfSuspended: true);
+            var delivery = await bus.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
+            if (delivery.Status == AgentDeliveryStatus.Rejected)
+            {
+                throw new SubagentException(
+                    delivery.Reason ?? "message to parent was rejected",
+                    SubagentErrorCodes.ContinuationUnavailable);
+            }
+            return true;
+        }
+
+        if (parentAgent is null)
+        {
+            throw new SubagentException(
+                $"parent session \"{parentSessionId}\" is not live",
+                SubagentErrorCodes.ContinuationUnavailable);
+        }
+        DeliverDirect(parentAgent, content, intent);
+        return true;
+    }
+
+    private async Task<bool> SendToPeerAsync(
+        IAgent sender,
+        string peerKey,
+        IReadOnlyList<ContentBlock> content,
+        AgentMessageIntent intent,
+        CancellationToken cancellationToken)
+    {
+        var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+        var persistent = Ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName, false);
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
+        var peerSessionId = SessionId.Create(peerKey);
+        var peerAgentId = AgentId.Create(peerKey);
+
+        var liveInRegistry = agents?.Get(peerSessionId)
+            ?? agents?.List().FirstOrDefault(agent =>
+                agent.AgentId == peerAgentId || agent.Session.Header.AgentId == peerAgentId);
+        var headlessPeer = liveInRegistry is null ? GetLive(peerSessionId) : null;
+
+        if (headlessPeer is not null)
+        {
+            DeliverDirect(headlessPeer, content, intent);
+            return true;
+        }
+
+        if (bus is not null)
+        {
+            var profile = persistent?.Get(peerAgentId)
+                ?? persistent?.List().FirstOrDefault(item =>
+                    item.ActiveSessionId == peerSessionId || item.SessionIds.Contains(peerSessionId));
+            if (liveInRegistry is null && profile is null)
+            {
+                throw new SubagentException(
+                    $"target agent \"{peerKey}\" is unknown or not reachable",
+                    SubagentErrorCodes.ContinuationUnavailable);
+            }
+            var trust = AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent
+                ? MessageTrustLevel.ExternalAgent
+                : MessageTrustLevel.TrustedPeerAgent;
+            var targetAgentId = liveInRegistry?.AgentId ?? profile?.AgentId ?? peerAgentId;
+            var targetSessionId = liveInRegistry?.Id ?? profile?.ActiveSessionId;
+            var envelope = new AgentEnvelope(
+                EnvelopeId: $"subagent-peer-{Guid.NewGuid():N}",
+                TargetAgentId: targetAgentId,
+                TargetSessionId: targetSessionId,
+                Sender: new MessagePrincipal(
+                    PrincipalKind.Agent,
+                    sender.AgentId.Value,
+                    sender.Session.Header.SubagentLabel ?? sender.Id.Value),
+                TrustLevel: trust,
+                Intent: intent == AgentMessageIntent.Control ? AgentMessageIntent.Task : intent,
+                Body: PlainText(content),
+                CreatedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                WakeIfSuspended: true);
+            var delivery = await bus.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
+            if (delivery.Status == AgentDeliveryStatus.Rejected)
+            {
+                throw new SubagentException(
+                    delivery.Reason ?? $"message to peer \"{peerKey}\" was rejected",
+                    SubagentErrorCodes.ContinuationUnavailable);
+            }
+            return true;
+        }
+
+        if (liveInRegistry is null)
+        {
+            throw new SubagentException(
+                $"peer agent \"{peerKey}\" is not live",
+                SubagentErrorCodes.ContinuationUnavailable);
+        }
+        DeliverDirect(liveInRegistry, content, intent);
+        return true;
+    }
+
+    private static void DeliverDirect(IAgent target, IReadOnlyList<ContentBlock> content, AgentMessageIntent intent)
+    {
+        var message = MessageFactory.CreateUserMessage(content);
+        if (intent == AgentMessageIntent.Steer)
+            target.Steer(message);
+        else
+            target.Followup(message);
+    }
+
+    private static string PlainText(IReadOnlyList<ContentBlock> content)
+        => string.Concat(content.OfType<TextBlock>().Select(block => block.Text));
+
+    private IAgent? GetLiveChild(SessionId parentId, SessionId childId)
+    {
+        lock (_sync)
+        {
+            var child = _liveRuns.GetValueOrDefault(childId)?.LocalAgent;
+            return child is not null && child.Session.Header.ParentSession == parentId ? child : null;
+        }
     }
 
     private ISubagentProvider ExpectProvider(string name)
@@ -177,11 +394,9 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
     {
         var info = new SubagentRunInfo(Guid.NewGuid().ToString(), providerName, run.Id, run.LocalAgent is not null);
         var observed = new ObservedRun(run, this);
-        if (run.LocalAgent is { } local)
-            Track(local.Id, observed);
+        Track(run.Id, observed);
         Ctx.Events.Emit(DshScope.ScopeTarget(Ctx, parent.ScopeKey), new SubagentStartNotification(info));
         // Callers await the observed result, so the end notification is out before the delegating tool returns.
-        // CI: the parent finished its turn while the end notification was still queued behind the same result.
         observed.Result = ObserveEndAsync(info, run, parent.ScopeKey);
         return observed;
     }
@@ -191,7 +406,7 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
         SubagentResult result;
         try
         {
-            result = await run.Result;
+            result = await run.Result.ConfigureAwait(false);
         }
         catch
         {
@@ -245,8 +460,184 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             return _childScopes.Contains(scope);
     }
 
+    private sealed class RemoteSubagentRun : ISubagentRun
+    {
+        private const int PollIntervalMs = 50;
+
+        private readonly IAgentExecutionRouter _router;
+        private readonly CancellationTokenSource _ownAbort;
+        private readonly CancellationTokenRegistration _parentRegistration;
+        private readonly TaskCompletionSource<IAgentExecutionHandle> _handleReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private IAgentExecutionHandle? _handle;
+        private volatile bool _cancelled;
+
+        public RemoteSubagentRun(
+            IAgentExecutionRouter router,
+            SubagentStartRequest request,
+            string? targetId,
+            AgentBackendKind? backend)
+        {
+            _router = router;
+            ParentId = request.Parent.Id;
+            Id = SessionId.Create($"remote-{Guid.NewGuid():N}");
+            _ownAbort = new CancellationTokenSource();
+            if (!request.Background)
+            {
+                _parentRegistration = request.Signal.Register(() =>
+                {
+                    _cancelled = true;
+                    _ownAbort.Cancel();
+                    if (_handle is { } handle)
+                        _ = BestEffortCancelAsync(handle);
+                });
+            }
+            Result = DriveAsync(request, targetId, backend);
+        }
+
+        public SessionId ParentId { get; }
+        public SessionId Id { get; }
+        public IAgent? LocalAgent => null;
+        public Task<SubagentResult> Result { get; }
+
+        public void Cancel()
+        {
+            _cancelled = true;
+            _ownAbort.Cancel();
+            if (_handle is { } handle)
+                _ = BestEffortCancelAsync(handle);
+        }
+
+        public async Task SendSteerAsync(string message)
+        {
+            try
+            {
+                var handle = await _handleReady.Task.WaitAsync(_ownAbort.Token).ConfigureAwait(false);
+                await handle.SendAsync(message, AgentMessageIntent.Steer, cancellationToken: _ownAbort.Token).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private async Task<SubagentResult> DriveAsync(
+            SubagentStartRequest request,
+            string? targetId,
+            AgentBackendKind? backend)
+        {
+            try
+            {
+                var dispatch = new AgentDispatchRequest(
+                    TargetId: string.IsNullOrWhiteSpace(targetId) ? null : targetId,
+                    PreferredBackend: backend,
+                    Prompt: PlainText(request.Prompt),
+                    Cwd: request.Parent.Session.WorkingDirectory,
+                    Name: request.Label,
+                    WaitForCompletion: false,
+                    Sender: new MessagePrincipal(
+                        PrincipalKind.Agent,
+                        request.Parent.AgentId.Value,
+                        request.Parent.Id.Value),
+                    AgentPreset: request.Persona);
+                var handle = await _router.DispatchAsync(dispatch, _ownAbort.Token).ConfigureAwait(false);
+                _handle = handle;
+                _handleReady.TrySetResult(handle);
+                if (_cancelled || _ownAbort.IsCancellationRequested)
+                {
+                    await BestEffortCancelAsync(handle).ConfigureAwait(false);
+                    return AbortedResult();
+                }
+
+                AgentExecutionSnapshot snapshot;
+                while (true)
+                {
+                    _ownAbort.Token.ThrowIfCancellationRequested();
+                    snapshot = await handle.GetStatusAsync(_ownAbort.Token).ConfigureAwait(false);
+                    if (snapshot.Completed || _cancelled)
+                        break;
+                    await Task.Delay(PollIntervalMs, _ownAbort.Token).ConfigureAwait(false);
+                }
+
+                if (_cancelled)
+                {
+                    await BestEffortCancelAsync(handle).ConfigureAwait(false);
+                    return AbortedResult();
+                }
+                if (!snapshot.Completed)
+                {
+                    return new SubagentResult
+                    {
+                        Output = [],
+                        StopReason = SubagentStopReason.Error,
+                        Diagnostic = "remote agent did not complete",
+                    };
+                }
+                if (snapshot.Error is { Length: > 0 } error)
+                {
+                    return new SubagentResult
+                    {
+                        Output = snapshot.Output is { Length: > 0 } partial ? [new TextBlock(partial)] : [],
+                        StopReason = SubagentStopReason.Error,
+                        Diagnostic = error,
+                    };
+                }
+                var text = snapshot.Output ?? "";
+                return new SubagentResult
+                {
+                    Output = text.Length > 0 ? [new TextBlock(text)] : [],
+                    StopReason = SubagentStopReason.Completed,
+                };
+            }
+            catch (OperationCanceledException) when (_cancelled || _ownAbort.IsCancellationRequested)
+            {
+                _handleReady.TrySetCanceled();
+                if (_handle is { } handle)
+                    await BestEffortCancelAsync(handle).ConfigureAwait(false);
+                return AbortedResult();
+            }
+            catch (Exception error)
+            {
+                _handleReady.TrySetCanceled();
+                return new SubagentResult
+                {
+                    Output = [],
+                    StopReason = SubagentStopReason.Error,
+                    Diagnostic = error.Message,
+                };
+            }
+        }
+
+        private static SubagentResult AbortedResult() => new()
+        {
+            Output = [],
+            StopReason = SubagentStopReason.Aborted,
+        };
+
+        private static async Task BestEffortCancelAsync(IAgentExecutionHandle handle)
+        {
+            try
+            {
+                await handle.CancelAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        public async Task DisposeAsync()
+        {
+            _cancelled = true;
+            await _ownAbort.CancelAsync().ConfigureAwait(false);
+            await _parentRegistration.DisposeAsync().ConfigureAwait(false);
+            if (_handle is { } handle)
+                await handle.DisposeAsync().ConfigureAwait(false);
+            _ownAbort.Dispose();
+        }
+    }
+
     private sealed class ObservedRun(ISubagentRun inner, SubagentRuntime owner) : ISubagentRun
     {
+        internal ISubagentRun Inner => inner;
+
         public SessionId Id => inner.Id;
 
         public IAgent? LocalAgent => inner.LocalAgent;
@@ -258,15 +649,13 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
         {
             try
             {
-                await inner.DisposeAsync();
+                await inner.DisposeAsync().ConfigureAwait(false);
             }
             finally
             {
+                owner.Untrack(inner.Id);
                 if (inner.LocalAgent is { } agent)
-                {
-                    owner.Untrack(agent.Id);
                     owner.ForgetChildScope(agent.ScopeKey);
-                }
             }
         }
     }

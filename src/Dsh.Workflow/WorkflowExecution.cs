@@ -21,7 +21,9 @@ public sealed class WorkflowExecution
         string? Phase = null,
         string? Provider = null,
         string? Model = null,
-        object? Schema = null);
+        object? Schema = null,
+        string? Target = null,
+        AgentBackendKind? Backend = null);
 
     private readonly object _sync = new();
     private readonly string _program;
@@ -30,6 +32,7 @@ public sealed class WorkflowExecution
     private readonly IChildPort _children;
     private readonly SubprocessService _subprocess;
     private readonly string _cwd;
+    private readonly IAgentExecutionRouter? _router;
     private readonly CancellationTokenSource _cts = new();
     private int _started;
     private int _activeSlots;
@@ -45,6 +48,18 @@ public sealed class WorkflowExecution
         IChildPort children,
         SubprocessService subprocess,
         string cwd)
+        : this(program, limits, observer, children, subprocess, cwd, router: null)
+    {
+    }
+
+    public WorkflowExecution(
+        string program,
+        WorkerLimits limits,
+        WorkflowExecutionObserver observer,
+        IChildPort children,
+        SubprocessService subprocess,
+        string cwd,
+        IAgentExecutionRouter? router)
     {
         _program = program;
         _limits = limits;
@@ -52,6 +67,7 @@ public sealed class WorkflowExecution
         _children = children;
         _subprocess = subprocess;
         _cwd = cwd;
+        _router = router;
     }
 
     public int AgentsStarted
@@ -251,7 +267,22 @@ public sealed class WorkflowExecution
             IChildHandle run;
             try
             {
-                run = await _children.StartAsync(new ChildStartRequest(prompt, opts.Schema, opts.Provider, opts.Model));
+                var startRequest = new ChildStartRequest(prompt, opts.Schema, opts.Provider, opts.Model);
+                var isRemote = (!string.IsNullOrWhiteSpace(opts.Target) && !string.Equals(opts.Target, "local", StringComparison.OrdinalIgnoreCase))
+                    || (opts.Backend is not null && opts.Backend != AgentBackendKind.Local);
+                if (isRemote)
+                {
+                    if (_children is IRoutedChildPort routed)
+                        run = await routed.StartAsync(startRequest, opts.Target, opts.Backend);
+                    else if (_router is not null)
+                        run = WorkflowRunHost.StartRemoteChild(_router, startRequest, opts.Target, opts.Backend, _cwd, null, _cts.Token);
+                    else
+                        throw new WorkflowError("remote agent() target requires IAgentExecutionRouter", WorkflowErrorCodes.AgentStart);
+                }
+                else
+                {
+                    run = await _children.StartAsync(startRequest);
+                }
             }
             catch (Exception error)
             {
@@ -343,7 +374,7 @@ public sealed class WorkflowExecution
             return new AgentOptionsResult();
         if (opts is not IDictionary<string, object?> record)
             throw new WorkflowError("agent() options must be an object", WorkflowErrorCodes.InvalidArgument);
-        var supported = new HashSet<string>(StringComparer.Ordinal) { "label", "phase", "schema", "provider", "model" };
+        var supported = new HashSet<string>(StringComparer.Ordinal) { "label", "phase", "schema", "provider", "model", "target", "backend" };
         var deferred = new HashSet<string>(StringComparer.Ordinal) { "effort", "isolation", "agentType" };
         foreach (var key in record.Keys)
         {
@@ -352,19 +383,27 @@ public sealed class WorkflowExecution
             if (deferred.Contains(key))
             {
                 throw new WorkflowError(
-                    $"agent() option \"{key}\" is deferred and not supported by this engine (supported: label, phase, schema, provider, model)",
+                    $"agent() option \"{key}\" is deferred and not supported by this engine (supported: label, phase, schema, provider, model, target, backend)",
                     WorkflowErrorCodes.UnsupportedOption);
             }
 
             throw new WorkflowError(
-                $"agent() option \"{key}\" is not recognized (supported: label, phase, schema, provider, model)",
+                $"agent() option \"{key}\" is not recognized (supported: label, phase, schema, provider, model, target, backend)",
                 WorkflowErrorCodes.UnsupportedOption);
         }
 
-        foreach (var key in new[] { "label", "phase", "provider", "model" })
+        foreach (var key in new[] { "label", "phase", "provider", "model", "target", "backend" })
         {
             if (record.TryGetValue(key, out var value) && value is not null && value is not string)
                 throw new WorkflowError($"agent() option \"{key}\" must be a string", WorkflowErrorCodes.InvalidArgument);
+        }
+
+        AgentBackendKind? backend = null;
+        if (ValueOf(record, "backend") is string backendText && !string.IsNullOrWhiteSpace(backendText))
+        {
+            if (!Enum.TryParse<AgentBackendKind>(backendText, ignoreCase: true, out var parsedBackend))
+                throw new WorkflowError($"agent() option \"backend\" has unknown value \"{backendText}\"", WorkflowErrorCodes.InvalidArgument);
+            backend = parsedBackend;
         }
 
         object? schema = null;
@@ -379,7 +418,9 @@ public sealed class WorkflowExecution
             ValueOf(record, "phase") as string,
             ValueOf(record, "provider") as string,
             ValueOf(record, "model") as string,
-            schema);
+            schema,
+            ValueOf(record, "target") as string,
+            backend);
     }
 
     private static object? ValueOf(IDictionary<string, object?> dict, string key)

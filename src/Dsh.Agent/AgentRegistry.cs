@@ -12,12 +12,32 @@ public sealed record CreateAgentOptions(
     string? AgentPreset = null,
     IReadOnlyList<SessionEvent>? Seed = null,
     long? InheritedEventCount = null,
-    Action<Context>? Setup = null);
+    Action<Context>? Setup = null,
+    AgentId? AgentId = null)
+{
+    public CreateAgentOptions(
+        SessionId? SessionId,
+        string? Cwd,
+        AgentOptions? AgentOptions,
+        string? AgentPreset,
+        IReadOnlyList<SessionEvent>? Seed,
+        long? InheritedEventCount,
+        Action<Context>? Setup)
+        : this(SessionId, Cwd, AgentOptions, AgentPreset, Seed, InheritedEventCount, Setup, null) { }
+}
 
 public sealed record ResumeAgentOptions(
     SessionId SessionId,
     AgentOptions? AgentOptions = null,
-    Action<Context>? Setup = null);
+    Action<Context>? Setup = null,
+    AgentId? AgentId = null)
+{
+    public ResumeAgentOptions(
+        SessionId SessionId,
+        AgentOptions? AgentOptions,
+        Action<Context>? Setup)
+        : this(SessionId, AgentOptions, Setup, null) { }
+}
 
 public sealed record AgentHandle(IAgent Agent, IDisposable Dispose);
 
@@ -30,8 +50,10 @@ public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
 
     private static readonly AsyncLocal<IAgent?> InitiatorSlot = new();
 
+    private readonly Lock _gate = new();
     private readonly Dictionary<SessionId, IAgent> _agents = [];
     private readonly Dictionary<SessionId, IAgent> _owners = [];
+    private readonly Dictionary<AgentId, List<IAgent>> _byAgent = [];
     private AgentLoop? _factory;
 
     public IAgent? CurrentInitiator() => InitiatorSlot.Value;
@@ -107,31 +129,77 @@ public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
 
     public void Enter(IAgent agent, IAgent? owner)
     {
-        if (_agents.ContainsKey(agent.Id))
-            throw new InvalidOperationException($"agent \"{agent.Id}\" is already registered");
-        _agents[agent.Id] = agent;
-        if (owner is not null)
-            _owners[agent.Id] = owner;
+        lock (_gate)
+        {
+            if (_agents.ContainsKey(agent.Id))
+                throw new InvalidOperationException($"agent \"{agent.Id}\" is already registered");
+            _agents[agent.Id] = agent;
+            if (owner is not null)
+                _owners[agent.Id] = owner;
+            if (!_byAgent.TryGetValue(agent.AgentId, out var list))
+            {
+                list = [];
+                _byAgent[agent.AgentId] = list;
+            }
+            list.Add(agent);
+        }
         Ctx.Emit(new AgentCreatedNotification(agent));
     }
 
-    public IAgent? Get(SessionId id) => _agents.TryGetValue(id, out var agent) ? agent : null;
+    public IAgent? Get(SessionId id)
+    {
+        lock (_gate)
+            return _agents.TryGetValue(id, out var agent) ? agent : null;
+    }
 
-    public IReadOnlyList<IAgent> List() => _agents.Values.ToList();
+    public IAgent? GetByAgent(AgentId agentId)
+    {
+        lock (_gate)
+            return _byAgent.TryGetValue(agentId, out var list) && list.Count > 0 ? list[^1] : null;
+    }
+
+    public IReadOnlyList<IAgent> ListByAgent(AgentId agentId)
+    {
+        lock (_gate)
+            return _byAgent.TryGetValue(agentId, out var list) ? [.. list] : [];
+    }
+
+    public IReadOnlyList<IAgent> List()
+    {
+        lock (_gate)
+            return [.. _agents.Values];
+    }
 
     public void Remove(SessionId id) => Unregister(id);
 
-    public bool IsOwnedBy(SessionId id, IAgent owner) => _owners.TryGetValue(id, out var existing) && ReferenceEquals(existing, owner);
+    public bool IsOwnedBy(SessionId id, IAgent owner)
+    {
+        lock (_gate)
+            return _owners.TryGetValue(id, out var existing) && ReferenceEquals(existing, owner);
+    }
 
-    public IReadOnlyList<IAgent> Roots() => _agents.Values.Where(agent => !_owners.ContainsKey(agent.Id)).ToList();
+    public IReadOnlyList<IAgent> Roots()
+    {
+        lock (_gate)
+            return [.. _agents.Values.Where(agent => !_owners.ContainsKey(agent.Id))];
+    }
 
     private void Unregister(SessionId id)
     {
-        if (_agents.Remove(id, out var agent))
+        IAgent? agent;
+        lock (_gate)
         {
+            if (!_agents.Remove(id, out agent))
+                return;
             _owners.Remove(id);
-            Ctx.Emit(new AgentDisposedNotification(agent));
+            if (_byAgent.TryGetValue(agent.AgentId, out var list))
+            {
+                list.Remove(agent);
+                if (list.Count == 0)
+                    _byAgent.Remove(agent.AgentId);
+            }
         }
+        Ctx.Emit(new AgentDisposedNotification(agent));
     }
 
     private sealed class FactoryRegistration(Action dispose) : IDisposable

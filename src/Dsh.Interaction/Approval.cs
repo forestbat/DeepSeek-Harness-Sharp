@@ -158,7 +158,8 @@ public sealed class ApprovalService : Service, IApprovalService
             return ApprovalOutcome.Cancelled;
         if (EffectivePolicy(session) == ApprovalPolicy.Never)
             return ApprovalOutcome.Rejected;
-        if (EffectivePolicy(session) == ApprovalPolicy.Auto || HasGrant(session, request.ToolName))
+        var isExternalAgent = AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent;
+        if (!isExternalAgent && (EffectivePolicy(session) == ApprovalPolicy.Auto || HasGrant(session, request.ToolName)))
             return ApprovalOutcome.AllowedOnce;
         var answer = DispatchAnswerers(request, signal);
         if (!signal.CanBeCanceled)

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Dsh.Runtime;
 using Dsh.Llm;
@@ -53,6 +54,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
     private int? _requestSurfaceGeneration;
     private readonly RuntimeContextProjection _runtimeContext;
     private readonly SystemPromptProjection _systemPrompt;
+    private readonly ConcurrentDictionary<MessageId, MessageAttribution> _attributions = [];
+    private readonly Action<Session, SessionEvent> _onSessionAppended;
     private PromptAssembly? _pendingAssembly;
     private string? _pendingReminder;
     private string? _lastDynamicText;
@@ -61,10 +64,17 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
     /** in-history 路由下单次追加进历史的段文本上限; 超过就重发整份 prompt 重建基线。 */
     private const int MaxInlinePromptUpdateChars = 16000;
 
-    public AgentLoopAgent(Context loopCtx, SessionId id, AgentOptions options, Session session, Func<Session, int> lastTurnOf)
+    public AgentLoopAgent(
+        Context loopCtx,
+        SessionId id,
+        AgentOptions options,
+        Session session,
+        Func<Session, int> lastTurnOf,
+        AgentId? agentId = null)
     {
         _loopCtx = loopCtx;
         Id = id;
+        AgentId = agentId ?? session.Header.AgentId ?? AgentId.FromSession(id);
         Options = options;
         Session = session;
         Dispatch = new AgentEventDispatch(loopCtx, this);
@@ -79,6 +89,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         _phase = new Phase.Idle { LastTurn = lastTurnOf(session) };
         _runtimeContext = new RuntimeContextProjection(Ctx, session);
         _systemPrompt = new SystemPromptProjection(session);
+        _onSessionAppended = OnSessionAppended;
+        session.Appended += _onSessionAppended;
     }
 
     internal static readonly object AgentContextKey = new();
@@ -86,11 +98,13 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
     /** 退订本 agent 挂在共享事件表上的投影;会话本身的释放由持有者(AgentLoop / 子代理 run)决定。 */
     public void Dispose()
     {
+        Session.Appended -= _onSessionAppended;
         Inbox.Dispose();
         _runtimeContext.Dispose();
     }
 
     public SessionId Id { get; }
+    public AgentId AgentId { get; }
     public AgentOptions Options { get; }
     public Session Session { get; }
     public ScopeKey ScopeKey { get; }
@@ -115,13 +129,90 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         _ => null,
     };
 
+    public void SetMessageAttribution(MessageId messageId, MessageAttribution attribution)
+    {
+        ArgumentNullException.ThrowIfNull(attribution);
+        _attributions[messageId] = attribution;
+    }
+
+    private MessageAttribution? PeekPendingAttribution()
+    {
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false) as AgentMessageBus;
+        foreach (var candidate in Inbox.NextStep.Concat(Inbox.NextTurn))
+        {
+            if (_attributions.TryGetValue(candidate.Id, out var local))
+                return local;
+            if (Inbox.PeekAttribution(candidate.Id) is { } inboxAttr)
+                return inboxAttr;
+            if (bus?.PeekAttribution(candidate.Id) is { } busAttr)
+                return busAttr;
+        }
+        return null;
+    }
+
+    private MessageAttribution? TakeStepAttribution(IReadOnlyList<UserMessage> messages)
+    {
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false) as AgentMessageBus;
+        MessageAttribution? selected = null;
+        foreach (var message in messages)
+        {
+            var inboxAttr = Inbox.TakeAttribution(message.Id);
+            var busAttr = bus?.TakeAttribution(message.Id);
+            var found = _attributions.TryRemove(message.Id, out var local)
+                ? local
+                : inboxAttr ?? busAttr;
+            if (found is null)
+                continue;
+            if (selected is null || found.TrustLevel >= selected.TrustLevel)
+                selected = found;
+        }
+        return selected;
+    }
+
+    private void OnSessionAppended(Session session, SessionEvent sessionEvent)
+    {
+        if (sessionEvent.Type == "approval/asked")
+            _ = PublishRuntimeEventAsync(AgentRuntimeEventKind.ApprovalRequested, $"Approval requested in session {session.Id}", AgentTurnAttribution.Current?.CorrelationId);
+    }
+
+    private async Task PublishRuntimeEventAsync(AgentRuntimeEventKind kind, string summary, string? correlationId = null, string? detail = null)
+    {
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
+        if (bus is null)
+            return;
+        try
+        {
+            var runtimeEvent = new AgentRuntimeEvent(
+                $"evt-{Guid.NewGuid():N}",
+                AgentId,
+                Id,
+                kind,
+                summary,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                correlationId,
+                detail);
+            await bus.PublishEventAsync(runtimeEvent).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Runtime telemetry/notifications must not break the agent turn lifecycle.
+        }
+    }
+
     public void Send(UserMessage message, string target, bool wakeup)
     {
         var wakingAfterAbort = wakeup
             && _phase is not Phase.Idle
             && PhaseAbort(_phase)?.IsCancellationRequested == true;
         var resolvedTarget = wakingAfterAbort ? InboxTargets.NextTurn : target;
-        Inbox.Splice(resolvedTarget, int.MaxValue, 0, [message]);
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false) as AgentMessageBus;
+        var attribution = _attributions.TryGetValue(message.Id, out var local)
+            ? local
+            : bus?.PeekAttribution(message.Id);
+        IReadOnlyDictionary<MessageId, MessageAttribution>? attributions = attribution is not null
+            ? new Dictionary<MessageId, MessageAttribution> { [message.Id] = attribution }
+            : null;
+        Inbox.Splice(resolvedTarget, int.MaxValue, 0, [message], attributions);
         if (wakeup)
             WakeDriver(wakingAfterAbort);
     }
@@ -314,6 +405,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         signal.ThrowIfCancellationRequested();
         var turn = phase.Turn + 1;
         TurnEndReason? turnEnds = null;
+        MessageAttribution? activeAttribution = null;
+        IDisposable? attributionScope = null;
         try
         {
             Session.Append(new TurnStartPayload(turn));
@@ -323,6 +416,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             throw ReportError(error);
         }
         phase.Turn = turn;
+        var initialAttribution = PeekPendingAttribution();
+        await PublishRuntimeEventAsync(AgentRuntimeEventKind.TurnStarted, $"Turn {turn} started", initialAttribution?.CorrelationId);
         var target = InboxTargets.NextTurn;
         try
         {
@@ -336,6 +431,13 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
                     return false;
                 }
                 var enter = (PreStepDecision.Enter)decision;
+                if (TakeStepAttribution(enter.Messages) is { } stepAttribution
+                    && (activeAttribution is null || stepAttribution.TrustLevel >= activeAttribution.TrustLevel))
+                {
+                    attributionScope?.Dispose();
+                    activeAttribution = stepAttribution;
+                    attributionScope = AgentTurnAttribution.Enter(activeAttribution);
+                }
                 if (turnEnds is not null && enter.Messages.Count == 0)
                     break;
                 if (phase.Step == 0 && enter.Messages.Count == 0)
@@ -407,6 +509,17 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
                 ReportError(error);
             }
             LogTurnEnd(turn, reason);
+            var (eventKind, summary, detail) = reason switch
+            {
+                TurnEndReason.Completed => (AgentRuntimeEventKind.TurnCompleted, $"Turn {turn} completed", (string?)null),
+                TurnEndReason.MaxTokens => (AgentRuntimeEventKind.TurnCompleted, $"Turn {turn} reached max tokens", (string?)null),
+                TurnEndReason.Error err => (AgentRuntimeEventKind.TurnFailed, $"Turn {turn} failed", err.Failure.Message),
+                TurnEndReason.Aborted aborted => (AgentRuntimeEventKind.TurnFailed, $"Turn {turn} aborted", aborted.Reason.Kind),
+                TurnEndReason.Blocked => (AgentRuntimeEventKind.TurnFailed, $"Turn {turn} blocked", "blocked"),
+                _ => (AgentRuntimeEventKind.TurnFailed, $"Turn {turn} ended", "unknown"),
+            };
+            await PublishRuntimeEventAsync(eventKind, summary, activeAttribution?.CorrelationId ?? initialAttribution?.CorrelationId, detail);
+            attributionScope?.Dispose();
         }
         if (!Inbox.HasPending)
             return false;
@@ -830,7 +943,7 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
                     : await tools.FinishScheduledExecution(slot.Value.Exec, slot.Value.Result);
                 AppendToolResult(turn, step, group[committed], result, callSeqs[committed]!.Value);
                 foreach (var context in result.AdditionalContexts ?? [])
-                    Inbox.Splice(InboxTargets.NextStep, Inbox.NextStep.Count, 0, [context]);
+                    Inbox.Splice(InboxTargets.NextStep, int.MaxValue, 0, [context]);
                 concluded = concluded || result is ToolExecutionResult.Success { ConcludesTurn: true };
                 committed++;
             }

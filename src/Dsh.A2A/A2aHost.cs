@@ -16,7 +16,9 @@ namespace Dsh.A2A;
 public sealed class A2aHost : IDisposable
 {
     private const string CardPath = "/.well-known/agent-card.json";
+    private const int MaxBodyBytes = 16 * 1024 * 1024;
     private static readonly JsonSerializerOptions Json = A2AJsonUtilities.DefaultOptions;
+    private static readonly HttpStatus PayloadTooLarge = new(413, "Payload Too Large");
 
     private const string BearerPrefix = "Bearer ";
 
@@ -134,49 +136,58 @@ public sealed class A2aHost : IDisposable
         {
             try
             {
-                var request = await HttpRequestReader.ReadAsync(stream, _stop.Token, int.MaxValue, allowChunked: true, allowExpectContinue: true).ConfigureAwait(false);
-                if (request is null)
+                var head = await HttpRequestReader.ReadHeadAsync(stream, _stop.Token).ConfigureAwait(false);
+                if (head is null)
                     return;
                 // Preserve host routing so a loopback socket cannot accept a DNS-rebound browser origin.
-                var host = request.Header("Host");
+                var host = head.Header("Host");
                 if (_host is not ("+" or "*") && !string.Equals(host, _authority, StringComparison.OrdinalIgnoreCase)
                     && !(_listener.LocalEndpoint is IPEndPoint { Port: 80 } && string.Equals(host, _host, StringComparison.OrdinalIgnoreCase)))
                 {
                     await HttpResponse.WriteTextAsync(stream, HttpStatus.Forbidden, "unexpected Host header", _stop.Token).ConfigureAwait(false);
                     return;
                 }
-                if (!IsAuthorized(request))
+                if (!IsAuthorized(head))
                 {
                     await HttpResponse.WriteAsync(stream, HttpStatus.Unauthorized, ReadOnlyMemory<byte>.Empty,
                         HttpResponse.PlainText, "WWW-Authenticate: Bearer\r\n", _stop.Token).ConfigureAwait(false);
                     return;
                 }
-                if (request.Method == "GET" && request.Path.EndsWith(CardPath, StringComparison.OrdinalIgnoreCase))
+                if (head.Method == "GET")
                 {
-                    await WriteJsonAsync(stream, _card!).ConfigureAwait(false);
+                    if (head.Path.EndsWith(CardPath, StringComparison.OrdinalIgnoreCase))
+                        await WriteJsonAsync(stream, _card!).ConfigureAwait(false);
+                    else
+                        await HttpResponse.WriteTextAsync(stream, HttpStatus.NotFound, "", _stop.Token).ConfigureAwait(false);
                     return;
                 }
-                if (request.Method == "POST")
+                if (head.Method != "POST" || head.Path.EndsWith(CardPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    JsonRpcRequest? rpc;
-                    try
-                    {
-                        rpc = JsonSerializer.Deserialize<JsonRpcRequest>(request.Body, Json);
-                    }
-                    catch (JsonException)
-                    {
-                        await WriteJsonAsync(stream, JsonRpcResponse.ParseErrorResponse(default)).ConfigureAwait(false);
-                        return;
-                    }
-                    if (rpc is null)
-                    {
-                        await WriteJsonAsync(stream, JsonRpcResponse.ParseErrorResponse(default)).ConfigureAwait(false);
-                        return;
-                    }
-                    await DispatchAsync(stream, rpc, _stop.Token).ConfigureAwait(false);
+                    await HttpResponse.WriteTextAsync(stream, HttpStatus.MethodNotAllowed, "", _stop.Token).ConfigureAwait(false);
                     return;
                 }
-                await HttpResponse.WriteTextAsync(stream, HttpStatus.NotFound, "", _stop.Token).ConfigureAwait(false);
+                var body = await HttpRequestReader.ReadBodyAsync(
+                    stream, head, MaxBodyBytes, allowChunked: true, allowExpectContinue: true, _stop.Token).ConfigureAwait(false);
+                JsonRpcRequest? rpc;
+                try
+                {
+                    rpc = JsonSerializer.Deserialize<JsonRpcRequest>(body, Json);
+                }
+                catch (JsonException)
+                {
+                    await WriteJsonAsync(stream, JsonRpcResponse.ParseErrorResponse(default)).ConfigureAwait(false);
+                    return;
+                }
+                if (rpc is null)
+                {
+                    await WriteJsonAsync(stream, JsonRpcResponse.ParseErrorResponse(default)).ConfigureAwait(false);
+                    return;
+                }
+                await DispatchAsync(stream, rpc, _stop.Token).ConfigureAwait(false);
+            }
+            catch (HttpBodyTooLargeException error)
+            {
+                await TryFailAsync(stream, PayloadTooLarge, error.Message).ConfigureAwait(false);
             }
             catch (InvalidDataException error)
             {
@@ -296,7 +307,7 @@ public sealed class A2aHost : IDisposable
         return HttpResponse.WriteAsync(stream, HttpStatus.Ok, bytes, HttpResponse.Json, "", _stop.Token);
     }
 
-    private bool IsAuthorized(HttpRequest request)
+    private bool IsAuthorized(HttpRequestHead request)
     {
         if (_authToken is null)
             return true;
