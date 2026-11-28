@@ -33,6 +33,9 @@ public sealed class Plugin(string packageName) : IDshPlugin
             paths.SessionsPath,
             warn: message => ctx.LoggerFor("sessionPersistence").Warn(message));
         ctx.Provide(ISessionPersistence.ServiceName, persistence);
+        var agentsRoot = paths.Path("agents");
+        _ = new JsonAgentProfileStore(ctx, agentsRoot);
+        _ = new JsonOfflineMailboxStore(ctx, agentsRoot);
         var command = SessionCommand.Register(ctx, persistence);
         var wiring = WirePersistence(ctx, persistence);
         return new DisposableBundle(persistence, command, wiring);

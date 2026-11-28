@@ -47,7 +47,20 @@ public sealed class SafetyBoundary : Service
             canonicalPath, intent, PathIsCanonical: canonicalPath is not null);
 
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
-        => PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
+    {
+        var effectiveRules = IsExternalAgentTurn() && rules.AutoApprove
+            ? new PermissionRules { AutoApprove = false, Blacklist = rules.Blacklist, Whitelist = rules.Whitelist }
+            : rules;
+        return PermissionEngine.Decide(effectiveRules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
+    }
+
+    private static bool IsExternalAgentTurn()
+        => AgentTurnAttribution.Current?.TrustLevel == MessageTrustLevel.ExternalAgent;
+
+    private static string DecorateReason(string reason)
+        => AgentTurnAttribution.Current is { TrustLevel: MessageTrustLevel.ExternalAgent } attribution
+            ? $"[ExternalAgent: {attribution.Sender.DisplayName ?? attribution.Sender.Id}] {reason}"
+            : reason;
 
     private (PermissionRules Rules, PermissionInput Input, PermissionDecision Decision) DecideAndRecord(
         string space, ToolRunContext? run, string? path = null, string? intent = null, string? lifecycleOwner = null)
@@ -212,10 +225,11 @@ public sealed class SafetyBoundary : Service
         {
             if (run?.Agent is null || approval is null)
                 throw new UnauthorizedAccessException("The operation requires approval with an active session and call; lifecycle operations cannot fabricate invocation context.");
+            var baseReason = reason ?? (input.Path is null
+                ? $"{space}: approve this entire tool call, including its actual file operations."
+                : $"{space}: approve only {input.Intent} {input.Path}");
             var outcome = await approval.Request(request ?? new(run.Agent, run.Name, run.CallId,
-                reason ?? (input.Path is null
-                    ? $"{space}: approve this entire tool call, including its actual file operations."
-                    : $"{space}: approve only {input.Intent} {input.Path}"),
+                DecorateReason(baseReason),
                 run.Arguments.GetRawText()), signal).ConfigureAwait(false);
             var name = outcome switch
             {
@@ -260,10 +274,13 @@ public sealed class SafetyBoundary : Service
             matchedFields[index] = field.Field;
             matchedPatterns[index] = field.Pattern;
         }
+        var resolvedOwner = owner ?? (AgentTurnAttribution.Current is { TrustLevel: not MessageTrustLevel.OwnerHuman } attr
+            ? $"{attr.TrustLevel}:{attr.Sender.Kind}:{attr.Sender.Id}"
+            : null);
         var payload = new SafetyDecisionAuditPayload(decision.Match?.RuleId, decision.Match?.RuleKind ?? "default",
             decision.AutoApprove, decision.Decision, run?.Name, PermissionEngine.DialectName(PermissionEngine.DialectOf(run?.Name)),
             matchedFields, matchedPatterns, input.Path, input.Intent, run?.Agent?.Session.Id.Value,
-            run?.CallId.Value, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), space, owner, outcome);
+            run?.CallId.Value, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), space, resolvedOwner, outcome);
         // 默认放行(autoApprove、未命中任何规则、也没有审批结果)不带信息, 却占到会话日志九成以上的事件量:
         // 它不落盘, 只发通知供审计看板/遥测按需消费。拒绝、命中规则、以及带审批结果的决策照旧逐条落盘。
         var persist = decision.Match is not null
