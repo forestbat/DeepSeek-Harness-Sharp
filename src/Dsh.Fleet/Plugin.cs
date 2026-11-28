@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Core;
 using Dsh.Agent;
 using Dsh.Plugins;
 using Dsh.Runtime;
@@ -23,26 +24,41 @@ public string[] Inject => [WorkspaceService.ServiceName, ToolRuntime.ServiceName
             ?? throw new InvalidOperationException("the fleet plugin requires a harness home");
         var service = new FleetService(new HarnessHome(root), ctx);
         FleetSessionTools? tools = null;
+        FleetAgentExecutionBackend? backend = null;
+        IDisposable? backendRegistration = null;
         try
         {
             ctx.Provide(FleetService.ServiceName, service);
             ctx.Provide(IOutboundRouteController.ServiceName, service.OutboundRoute);
             tools = new FleetSessionTools(ctx, () => service.CreateClient(new FleetOptions { ClientName = "dsh-fleet-tools" }));
             var registration = ctx.Get<WorkspaceService>(WorkspaceService.ServiceName)!.Register(ctx, service);
-            return new Activation(tools, registration);
+            if (ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName, false) is { } router)
+            {
+                backend = new FleetAgentExecutionBackend(service);
+                backendRegistration = router.RegisterBackend(backend);
+            }
+            return new Activation(tools, registration, backendRegistration, backend);
         }
         catch
         {
+            backendRegistration?.Dispose();
+            backend?.Dispose();
             tools?.Dispose();
             service.Dispose();
             throw;
         }
     }
 
-    private sealed class Activation(FleetSessionTools tools, IDisposable registration) : IDisposable
+    private sealed class Activation(
+        FleetSessionTools tools,
+        IDisposable registration,
+        IDisposable? backendRegistration,
+        FleetAgentExecutionBackend? backend) : IDisposable
     {
         public void Dispose()
         {
+            backendRegistration?.Dispose();
+            backend?.Dispose();
             tools.Dispose();
             registration.Dispose();
         }

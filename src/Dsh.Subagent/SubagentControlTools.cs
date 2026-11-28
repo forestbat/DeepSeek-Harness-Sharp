@@ -15,8 +15,7 @@ public static class SubagentControlTools
     public const string ListAgentsToolName = "list_agents";
 
     private const string SendMessageDescription =
-        "Send a message to a live direct child subagent; the target treats it as a user message injected at the "
-        + "next step boundary. Also usable toward the direct parent of this session while running as a subagent.";
+        "Send a message to a live direct child subagent, the direct parent of this session, or a peer AgentId/SessionId.";
 
     private const string InterruptDescription =
         "Interrupt a live direct child subagent (cancels its current work). Unknown or already-finished ids are accepted as a no-op.";
@@ -53,13 +52,18 @@ public static class SubagentControlTools
                 ["target"] = new JsonObject
                 {
                     ["type"] = "string",
-                    ["enum"] = new JsonArray("child", "parent"),
-                    ["description"] = "Address a direct child subagent, or the direct parent while running as a subagent.",
+                    ["description"] = "Address \"child\", \"parent\", or a peer AgentId / SessionId.",
                 },
                 ["childId"] = new JsonObject
                 {
                     ["type"] = "string",
                     ["description"] = "Target child subagent id (from `subagent` with run_in_background, or `list_agents`). Required when target is `child`.",
+                },
+                ["intent"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["enum"] = new JsonArray("notify", "task", "steer"),
+                    ["description"] = "Optional delivery intent for parent or peer messaging (default: task).",
                 },
             },
         },
@@ -75,36 +79,43 @@ public static class SubagentControlTools
                 },
             },
             (_, value) => [new TextBlock(value.GetProperty("delivered").GetBoolean()
-                ? "Message delivered to the child subagent."
+                ? "Message delivered."
                 : "Message was not delivered.")]),
         Execute = (args, exec) => SendMessageExecute(ctx, args, exec),
     };
 
-    private static Task<object?> SendMessageExecute(Context ctx, JsonElement args, ToolRunContext exec)
+    private static async Task<object?> SendMessageExecute(Context ctx, JsonElement args, ToolRunContext exec)
     {
         var agent = exec.Agent
             ?? throw new InvalidOperationException("send_message requires a calling agent (exec.agent was undefined)");
-        var target = args.GetProperty("target").GetString();
-        if (target != "child")
-        {
-            throw new SubagentException(
-                "messaging the parent is not available in this deployment (the continuation runtime is not ported)",
-                SubagentErrorCodes.ContinuationUnavailable);
-        }
-        if (!args.TryGetProperty("childId", out var childIdValue) || childIdValue.GetString() is not { Length: > 0 } childId)
-        {
-            throw new SubagentException(
-                "send_message with target \"child\" requires childId", SubagentErrorCodes.NoProvider);
-        }
+        var target = args.GetProperty("target").GetString() ?? "";
+        var childId = args.TryGetProperty("childId", out var childIdValue) && childIdValue.ValueKind == JsonValueKind.String
+            ? childIdValue.GetString()
+            : null;
+        var intent = ParseIntent(args);
         var runtime = ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!;
         var content = args.GetProperty("content").GetString() ?? "";
-        if (!runtime.InjectChild(agent.Id, SessionId.Create(childId), [new TextBlock(content)]))
+        var delivered = await runtime.SendMessageAsync(
+            agent,
+            target,
+            childId,
+            [new TextBlock(content)],
+            intent,
+            exec.Signal).ConfigureAwait(false);
+        return new JsonObject { ["delivered"] = delivered };
+    }
+
+    private static AgentMessageIntent ParseIntent(JsonElement args)
+    {
+        if (!args.TryGetProperty("intent", out var intentValue) || intentValue.ValueKind != JsonValueKind.String)
+            return AgentMessageIntent.Task;
+        return intentValue.GetString()?.ToLowerInvariant() switch
         {
-            throw new SubagentException(
-                $"child subagent \"{childId}\" is not live (already finished or unknown)",
-                SubagentErrorCodes.ContinuationUnavailable);
-        }
-        return Task.FromResult<object?>(new JsonObject { ["delivered"] = true });
+            "notify" => AgentMessageIntent.Notify,
+            "steer" => AgentMessageIntent.Steer,
+            "task" => AgentMessageIntent.Task,
+            _ => AgentMessageIntent.Task,
+        };
     }
 
     private static ToolDefinition InterruptAgentDefinition(Context ctx) => new()

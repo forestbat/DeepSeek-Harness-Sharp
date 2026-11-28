@@ -1,7 +1,7 @@
 ﻿using System.Text;
-using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Runtime;
 
 namespace Dsh.Board;
 
@@ -73,8 +73,7 @@ public sealed record BoardClaim(
 public sealed record BoardPage(IReadOnlyList<BoardMessage> Messages, long Cursor, bool HasMore);
 
 /**
- * 谱系树共享看板：每棵以主会话为根的树一块板，sub agent 之间以小的增量消息共享发现，
- * 替代大上下文的 fork 继承。进程内实现；集群部署时替换为共享存储实现（同一接口）。
+ * 共享看板：默认以主会话为根的谱系树每棵一块板，也支持显式指定 team/room boardId 让多个独立根会话共享同一看板。
  */
 public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, ServiceName)
 {
@@ -89,17 +88,22 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
     public const int DefaultClaimTtlSeconds = 600;
     public const int MaxClaimTtlSeconds = 3600;
 
-    private sealed class BoardState
+    private readonly record struct BoardKey(bool Explicit, string Id);
+
+    private sealed class BoardState(bool isExplicit)
     {
+        public bool IsExplicit { get; } = isExplicit;
         public long NextSeq = 1;
         public List<BoardMessage> Messages = [];
         public int Bytes;
         public readonly Dictionary<(SessionId Sender, string Key), BoardMessage> Dedup = [];
         public long NextClaimSeq = 1;
         public List<BoardClaim> Claims = [];
+        public readonly HashSet<SessionId> Participants = [];
     }
 
-    private readonly Dictionary<SessionId, BoardState> _boards = [];
+    private readonly Dictionary<BoardKey, BoardState> _boards = [];
+    private readonly Dictionary<SessionId, HashSet<string>> _joinedExplicitBoards = [];
     private readonly Lock _sync = new();
 
     public static SwarmBoard Register(Context ctx, TimeProvider? clock = null) => new(ctx, clock ?? TimeProvider.System);
@@ -108,7 +112,14 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
 
     public bool IsMain(IAgent agent) => RootOf(agent) == agent.Id;
 
-    public BoardMessage Post(IAgent sender, string to, BoardMessageKind kind, string body, string? replyTo, string idempotencyKey)
+    public BoardMessage Post(
+        IAgent sender,
+        string to,
+        BoardMessageKind kind,
+        string body,
+        string? replyTo,
+        string idempotencyKey,
+        string? boardId = null)
     {
         if (string.IsNullOrWhiteSpace(body))
             throw new BoardException("board message body is required", BoardErrorCodes.InvalidMessage);
@@ -120,13 +131,16 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
         if (bodyBytes > MaxMessageBytes)
             throw new BoardException(
                 $"board message body exceeds {MaxMessageBytes} bytes", BoardErrorCodes.CapacityExceeded);
+
+        var key = KeyFor(sender, boardId);
         var root = RootOf(sender);
         lock (_sync)
         {
-            var board = BoardFor(root);
+            var board = BoardFor(key);
+            var recipient = board.IsExplicit ? to : NormalizeRecipient(to, root);
             if (board.Dedup.TryGetValue((sender.Id, idempotencyKey), out var existing))
             {
-                if (existing.To != NormalizeRecipient(to, root)
+                if (existing.To != recipient
                     || existing.Kind != kind
                     || existing.Body != body
                     || existing.ReplyTo != replyTo)
@@ -137,10 +151,12 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
                 }
                 return existing;
             }
-            var recipient = NormalizeRecipient(to, root);
             if (recipient == sender.Id.Value)
                 throw new BoardException("board messages cannot be sent to yourself", BoardErrorCodes.InvalidMessage);
-            AssertParticipant(root, recipient);
+            if (!board.IsExplicit)
+                AssertParticipant(root, recipient);
+            else
+                TrackExplicitParticipation(sender.Id, key.Id, board);
             if (replyTo is not null && !board.Messages.Exists(message => message.Id == replyTo))
                 throw new BoardException($"reply target \"{replyTo}\" is not on this board", BoardErrorCodes.UnknownReference);
             if (board.Messages.Count >= MaxMessagesPerBoard)
@@ -164,13 +180,16 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
     }
 
     /** 增量读：返回 seq 大于 since 的消息（升序），受 limit 与单次读字节上限约束。 */
-    public BoardPage Read(IAgent reader, long since = 0, int limit = DefaultReadLimit)
+    public BoardPage Read(IAgent reader, long since = 0, int limit = DefaultReadLimit, string? boardId = null)
     {
         if (limit < 1 || limit > MaxReadLimit)
             throw new BoardException($"board read limit must be between 1 and {MaxReadLimit}", BoardErrorCodes.InvalidMessage);
+        var key = KeyFor(reader, boardId);
         lock (_sync)
         {
-            var board = BoardFor(RootOf(reader));
+            var board = BoardFor(key);
+            if (board.IsExplicit)
+                TrackExplicitParticipation(reader.Id, key.Id, board);
             var page = new List<BoardMessage>();
             var bytes = 0;
             foreach (var message in board.Messages)
@@ -189,11 +208,12 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
     }
 
     /** 收件活动水位：发给该读者（或 ALL）且非本人发出的最新消息 seq；无则返回 after 原值。 */
-    public long Activity(IAgent viewer, long after)
+    public long Activity(IAgent viewer, long after, string? boardId = null)
     {
+        var key = KeyFor(viewer, boardId);
         lock (_sync)
         {
-            var board = BoardFor(RootOf(viewer));
+            var board = BoardFor(key);
             var recipient = viewer.Id.Value;
             var latest = after;
             foreach (var message in board.Messages)
@@ -207,9 +227,20 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
         }
     }
 
-    /** 参与者名册：树根 + 店内 RootSession 指向该根的会话（无头子代不入店，不在名册）。 */
-    public IReadOnlyList<SessionId> Roster(IAgent viewer)
+    /** 参与者名册：默认返回谱系树成员；显式 team board 返回参与过该看板的独立成员集合。 */
+    public IReadOnlyList<SessionId> Roster(IAgent viewer, string? boardId = null)
     {
+        var key = KeyFor(viewer, boardId);
+        if (key.Explicit)
+        {
+            lock (_sync)
+            {
+                var board = BoardFor(key);
+                TrackExplicitParticipation(viewer.Id, key.Id, board);
+                return [.. board.Participants];
+            }
+        }
+
         var root = RootOf(viewer);
         var roster = new List<SessionId> { root };
         if (Ctx.Get<SessionStore>(SessionStore.ServiceName, false) is not { } sessions)
@@ -224,7 +255,7 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
 
     /** 声明一段文件区域(软锁): 返回本次 claim 与与之重叠的既有 claim(不含自己)。同一所有者对同区域重复声明视为续期。 */
     public (BoardClaim Claim, IReadOnlyList<BoardClaim> Conflicts) Claim(
-        IAgent owner, string path, int startLine, int endLine, string intent, int? ttlSeconds)
+        IAgent owner, string path, int startLine, int endLine, string intent, int? ttlSeconds, string? boardId = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new BoardException("claim path is required", BoardErrorCodes.InvalidMessage);
@@ -233,9 +264,12 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
         var ttl = ttlSeconds ?? DefaultClaimTtlSeconds;
         if (ttl < 1 || ttl > MaxClaimTtlSeconds)
             throw new BoardException($"claim ttl must be between 1 and {MaxClaimTtlSeconds} seconds", BoardErrorCodes.InvalidMessage);
+        var key = KeyFor(owner, boardId);
         lock (_sync)
         {
-            var board = BoardFor(RootOf(owner));
+            var board = BoardFor(key);
+            if (board.IsExplicit)
+                TrackExplicitParticipation(owner.Id, key.Id, board);
             var now = NowMilliseconds;
             board.Claims.RemoveAll(claim => claim.ExpiresAt <= now);
             var conflicts = board.Claims
@@ -268,11 +302,12 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
     }
 
     /** 释放 claim: 只释放本人所有; claimId 优先, 否则按 path。返回释放条数。 */
-    public int Release(IAgent owner, string? claimId, string? path)
+    public int Release(IAgent owner, string? claimId, string? path, string? boardId = null)
     {
+        var key = KeyFor(owner, boardId);
         lock (_sync)
         {
-            var board = BoardFor(RootOf(owner));
+            var board = BoardFor(key);
             var now = NowMilliseconds;
             board.Claims.RemoveAll(claim => claim.ExpiresAt <= now);
             return board.Claims.RemoveAll(claim =>
@@ -284,21 +319,42 @@ public sealed class SwarmBoard(Context ctx, TimeProvider clock) : Service(ctx, S
     }
 
     /** 当前有效 claim(先清过期), 供 board_read 与冲突提示。 */
-    public IReadOnlyList<BoardClaim> Claims(IAgent viewer)
+    public IReadOnlyList<BoardClaim> Claims(IAgent viewer, string? boardId = null)
     {
+        var key = KeyFor(viewer, boardId);
         lock (_sync)
         {
-            var board = BoardFor(RootOf(viewer));
+            var board = BoardFor(key);
             var now = NowMilliseconds;
             board.Claims.RemoveAll(claim => claim.ExpiresAt <= now);
             return [.. board.Claims];
         }
     }
 
+    internal IReadOnlyList<string> JoinedBoardsOf(SessionId agentId)
+    {
+        lock (_sync)
+            return _joinedExplicitBoards.TryGetValue(agentId, out var boards) ? [.. boards] : [];
+    }
+
     private long NowMilliseconds => clock.GetUtcNow().ToUnixTimeMilliseconds();
 
-    private BoardState BoardFor(SessionId root)
-        => _boards.TryGetValue(root, out var board) ? board : _boards[root] = new BoardState();
+    private BoardKey KeyFor(IAgent agent, string? boardId)
+        => string.IsNullOrWhiteSpace(boardId) ? new(false, RootOf(agent).Value) : new(true, boardId.Trim());
+
+    private BoardState BoardFor(BoardKey key)
+        => _boards.TryGetValue(key, out var board) ? board : _boards[key] = new BoardState(key.Explicit);
+
+    private void TrackExplicitParticipation(SessionId agentId, string boardId, BoardState board)
+    {
+        board.Participants.Add(agentId);
+        if (!_joinedExplicitBoards.TryGetValue(agentId, out var joined))
+        {
+            joined = new HashSet<string>(StringComparer.Ordinal);
+            _joinedExplicitBoards[agentId] = joined;
+        }
+        joined.Add(boardId);
+    }
 
     private static string NormalizeRecipient(string to, SessionId root)
         => to == "main" ? root.Value : to;

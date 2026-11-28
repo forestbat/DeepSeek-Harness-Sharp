@@ -34,6 +34,8 @@ public sealed class A2aClientTools(IReadOnlyDictionary<string, A2aRemoteSettings
 
     private readonly A2aRemoteClient _client = new(remotes, proxy);
 
+    internal A2aRemoteClient Client => _client;
+
     public IDisposable Register(Context ctx)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
@@ -61,11 +63,12 @@ public sealed class A2aClientTools(IReadOnlyDictionary<string, A2aRemoteSettings
     private ToolDefinition SendTool() => new()
     {
         Name = Send,
-        Description = "Send a text message to a remote A2A agent as an A2A client; optionally poll until the task is terminal.",
+        Description = "Send a text message to a remote A2A agent as an A2A client; optionally continue an existing context_id or poll until terminal.",
         Parameters = Parameters(
         [
             ("target", TargetSchema()),
             ("message", StringSchema("Text to send as a user message.")),
+            ("context_id", StringSchema("Optional context id to continue an existing remote A2A session.")),
             ("wait", new JsonObject { ["type"] = "boolean", ["description"] = "Poll for a terminal task state; default true." }),
             ("timeout_seconds", new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = MaxPollSeconds, ["description"] = "Poll budget in seconds; default 60." }),
         ], "target", "message"),
@@ -73,10 +76,13 @@ public sealed class A2aClientTools(IReadOnlyDictionary<string, A2aRemoteSettings
         Execute = async (args, exec) =>
         {
             var wait = !args.TryGetProperty("wait", out var waitElement) || waitElement.ValueKind != JsonValueKind.False;
+            var contextId = args.TryGetProperty("context_id", out var contextElement) && contextElement.ValueKind == JsonValueKind.String
+                ? contextElement.GetString()
+                : null;
             var timeout = args.TryGetProperty("timeout_seconds", out var secondsElement) && secondsElement.TryGetInt32(out var seconds)
                 ? Math.Clamp(seconds, 1, MaxPollSeconds)
                 : DefaultPollSeconds;
-            return await _client.SendAsync(RequireString(args, "target"), RequireString(args, "message"), wait, timeout, exec.Signal);
+            return await _client.SendAsync(RequireString(args, "target"), RequireString(args, "message"), wait, timeout, contextId, exec.Signal);
         },
     };
 

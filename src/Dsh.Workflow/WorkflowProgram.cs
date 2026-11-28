@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.CSharp;
 namespace Dsh.Workflow;
 
 /** 工作流模型程序: 复用 PTC script-host, 宿主侧只提供 agent/phase/log 三个绑定,
- *  parallel/pipeline 是 guest 侧本地助手, 语义与原 workflow 助手保持一致。 */
+ *  agent(prompt, opts) 支持可选 target / backend 字段走统一执行路由, parallel/pipeline 是 guest 侧本地助手。 */
 internal static class WorkflowProgram
 {
     public static readonly IReadOnlyList<string> Bindings = ["agent", "log", "phase"];
