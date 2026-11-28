@@ -55,6 +55,16 @@ internal sealed class AcpAgentSession : IAsyncDisposable
     /** Completes with the exit code once the agent process is gone. */
     public Task<int> Exited => _process.Exited;
 
+    public Session TranscriptSession => _transcript.Session;
+
+    public Task WaitTurnAsync(CancellationToken cancellationToken = default)
+    {
+        Task turn;
+        lock (_turnGate)
+            turn = _turn;
+        return turn.WaitAsync(cancellationToken);
+    }
+
     /**
      * Starts the agent process and opens a new ACP session, or reopens ResumeId (session/resume when supported, else session/load,
      * whose history replay is not recorded again because the transcript already holds it).

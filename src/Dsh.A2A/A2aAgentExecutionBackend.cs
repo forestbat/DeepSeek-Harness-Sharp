@@ -39,7 +39,7 @@ public sealed class A2aAgentExecutionBackend : IAgentExecutionBackend
             TargetId: $"{TargetPrefix}{entry.Key}",
             Kind: AgentBackendKind.A2a,
             DisplayName: entry.Key,
-            Endpoint: entry.Value.Url,
+            Endpoint: A2aRemoteClient.SanitizeEndpoint(entry.Value.Url),
             Available: !string.IsNullOrWhiteSpace(entry.Value.Url),
             Capabilities: ["a2a"])).ToList();
         return Task.FromResult<IReadOnlyList<RemoteExecutionTarget>>(targets);

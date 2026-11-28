@@ -185,6 +185,8 @@ public sealed class WorkflowRunHost : IWorkflowRun
 
     private sealed class RemoteChildHandle : IChildHandle
     {
+        private const int PollIntervalMs = 50;
+
         private readonly CancellationTokenSource _cts;
         private IAgentExecutionHandle? _handle;
 
@@ -221,8 +223,19 @@ public sealed class WorkflowRunHost : IWorkflowRun
                 Cwd: cwd,
                 WaitForCompletion: true,
                 Sender: sender);
-            _handle = await router.DispatchAsync(dispatch, _cts.Token).ConfigureAwait(false);
-            var snapshot = await _handle.GetStatusAsync(_cts.Token).ConfigureAwait(false);
+            var handle = await router.DispatchAsync(dispatch, _cts.Token).ConfigureAwait(false);
+            _handle = handle;
+            AgentExecutionSnapshot snapshot;
+            while (true)
+            {
+                _cts.Token.ThrowIfCancellationRequested();
+                snapshot = await handle.GetStatusAsync(_cts.Token).ConfigureAwait(false);
+                if (snapshot.Completed)
+                    break;
+                await Task.Delay(PollIntervalMs, _cts.Token).ConfigureAwait(false);
+            }
+            if (!snapshot.Completed)
+                throw new WorkflowError("remote agent did not complete", WorkflowErrorCodes.AgentResult);
             if (snapshot.Error is { Length: > 0 })
             {
                 return new ChildResult(
@@ -230,11 +243,13 @@ public sealed class WorkflowRunHost : IWorkflowRun
                     null,
                     WorkflowAgentOutcome.Failed);
             }
-            var text = snapshot.Output ?? snapshot.Summary ?? "";
+            var text = snapshot.Output ?? "";
             IReadOnlyList<ContentBlock> blocks = text.Length > 0 ? [new TextBlock(text)] : [];
             object? structured = null;
             if (request.Schema is not null)
             {
+                if (string.IsNullOrWhiteSpace(text))
+                    throw new WorkflowError("remote agent returned empty JSON for schema", WorkflowErrorCodes.AgentResult);
                 var node = JsonNode.Parse(text)
                     ?? throw new WorkflowError("remote agent returned empty JSON for schema", WorkflowErrorCodes.AgentResult);
                 var schemaObject = DshJson.ToNodeRuntime(request.Schema)?.AsObject()
@@ -253,6 +268,16 @@ public sealed class WorkflowRunHost : IWorkflowRun
             await _cts.CancelAsync().ConfigureAwait(false);
             if (_handle is { } handle)
             {
+                if (!Result.IsCompleted)
+                {
+                    try
+                    {
+                        await handle.CancelAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                    }
+                }
                 try
                 {
                     await handle.DisposeAsync().ConfigureAwait(false);
