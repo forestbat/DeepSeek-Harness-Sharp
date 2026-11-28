@@ -80,6 +80,8 @@ public sealed class RemoteHostAgentTests : IDisposable
         public Task NotifyChangedAsync(RemoteNotificationChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task PtyOutputAsync(RemotePtyFrame frame, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task MeshChangedAsync(RemoteMeshChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

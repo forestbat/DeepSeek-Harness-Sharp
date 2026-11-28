@@ -1,3 +1,4 @@
+using Dsh.Core;
 using Dsh.GitInspect;
 using Dsh.RemoteHost;
 
@@ -122,4 +123,29 @@ public interface IWorkspaceHost
     Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<RemoteSessionSummary>> ListHostSessionsAsync(CancellationToken cancellationToken = default);
     IAsyncEnumerable<RemoteSessionChange> HostSessionChangesAsync(CancellationToken cancellationToken = default);
+}
+
+/** Optional 0.5.0 agent mesh capability (agents, rooms, discovery, channels). */
+public interface IWorkspaceMesh
+{
+    Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken = default);
+    Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, CancellationToken cancellationToken = default);
+    Task<AgentProfile> WakeAgentAsync(string agentId, CancellationToken cancellationToken = default);
+    Task<bool> SuspendAgentAsync(string agentId, CancellationToken cancellationToken = default);
+    Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<RemoteExecutionTarget>> ListTargetsAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken = default);
+    Task<CollaborationRoom> CreateRoomAsync(string name, RoomPolicy? policy = null, CancellationToken cancellationToken = default);
+    Task<RoomInvite> CreateInviteAsync(string roomId, RoomRole role, int? ttlSeconds = null, int maxUses = 1, CancellationToken cancellationToken = default);
+    Task<CollaborationRoom> JoinRoomAsync(string token, string? agentId = null, CancellationToken cancellationToken = default);
+    Task<RoomMessage> PostRoomMessageAsync(string roomId, string body, string? targetAgentId = null, string? replyToMessageId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(string roomId, long afterSeq = 0, int limit = 100, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(string? query = null, CancellationToken cancellationToken = default);
+    Task<AgentTrustRecord> GrantTrustAsync(string cardId, AgentTrustPermissions permissions, string? note = null, CancellationToken cancellationToken = default);
+    Task<AgentTrustRecord> RevokeTrustAsync(string cardId, string? reason = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<AgentTrustRecord>> ListTrustAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ChannelBinding>> ListChannelsAsync(CancellationToken cancellationToken = default);
+    Task<ChannelBinding> BindChannelAsync(ChannelBinding binding, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<AutomationTriggerRule>> ListTriggersAsync(CancellationToken cancellationToken = default);
+    IAsyncEnumerable<RemoteMeshChange> MeshChangesAsync(CancellationToken cancellationToken = default);
 }

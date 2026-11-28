@@ -394,6 +394,9 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
     public Task PtyOutputAsync(RemotePtyFrame frame, CancellationToken cancellationToken = default)
         => _pty.OnOutputAsync(frame);
 
+    public Task MeshChangedAsync(RemoteMeshChange change, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     /** 反向调用: host 请本端打开/取消编辑器。 */
     public Task<EditorResult> ClientOpenAsync(RemoteEditorOpen request, CancellationToken cancellationToken = default)
         => Editor.ClientOpenAsync(request, cancellationToken);
@@ -469,6 +472,9 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
 
         public async Task PtyOutputAsync(RemotePtyFrame frame, CancellationToken cancellationToken = default)
             => await (await OwnerAsync().ConfigureAwait(false)).PtyOutputAsync(frame, cancellationToken).ConfigureAwait(false);
+
+        public async Task MeshChangedAsync(RemoteMeshChange change, CancellationToken cancellationToken = default)
+            => await (await OwnerAsync().ConfigureAwait(false)).MeshChangedAsync(change, cancellationToken).ConfigureAwait(false);
 
         /** client.ide.* 两条反向方法按线协议名登记。 */
         public (string Method, Delegate Handler)[] Methods() =>

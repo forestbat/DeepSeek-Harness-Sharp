@@ -164,6 +164,7 @@ public static class SessionEventCodec
         // 回退不进 ignorable: 旧版本跳过它就会把已经回退的内容继续当上下文发给模型。
         Register<SessionRevertPayload>(SessionEventTypes.SessionRevert);
         Register<InboxSplicePayload>(SessionEventTypes.AgentInboxSpliced);
+        Register<AgentEnvelopePayload>(SessionEventTypes.AgentEnvelope, ignorable: true);
         Register<WorkingDirectoryChangedPayload>(SessionEventTypes.WorkingDirectoryChange);
         Register<UserMessagePayload>(SessionEventTypes.UserMessage,
             (element, options) => new UserMessagePayload(

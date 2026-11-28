@@ -82,7 +82,12 @@ public static class HostProtocol
 
 
 /** 握手请求: 客户端声明的协议版本与 token; ClientName 是客户端自报的显示名(如 "gui@laptop"), 用于标注由谁回答了审批。 */
-public sealed record HostHelloRequest(string? Token, int ProtocolVersion, string? ClientName = null);
+public sealed record HostHelloRequest(
+    string? Token,
+    int ProtocolVersion,
+    string? ClientName = null,
+    string? PrincipalId = null,
+    string? InviteToken = null);
 
 /** 握手响应: 服务端版本; Mismatch 非空即拒绝(附原因); ConnectionId 是本连接在 host 内的唯一标识。 */
 public sealed record HostHelloResponse(
@@ -91,7 +96,8 @@ public sealed record HostHelloResponse(
     string HostVersion,
     string? Mismatch,
     IReadOnlyList<string>? Capabilities = null,
-    string? ConnectionId = null);
+    string? ConnectionId = null,
+    string? Role = null);
 
 /** 服务端信息。 */
 public sealed record HostInfo(int ProtocolVersion, string HostVersion, string Platform, string HomeRoot, IReadOnlyList<string>? Capabilities = null);
@@ -404,6 +410,10 @@ public static class HostProtocolCatalog
             ["NetworkOutbound"] = NetworkProtocol.Capability,
             ["NetworkProbeCancellation"] = NetworkProtocol.CancellableProbeCapability,
             ["NetworkReload"] = NetworkProtocol.ReloadCapability,
+            ["AgentMesh"] = MeshProtocol.CapabilityMesh,
+            ["CollabRooms"] = MeshProtocol.CapabilityRooms,
+            ["AgentDiscovery"] = MeshProtocol.CapabilityDiscovery,
+            ["ChannelsIngress"] = MeshProtocol.CapabilityChannels,
         });
 }
 
