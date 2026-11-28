@@ -1,7 +1,9 @@
+using Dsh.Core;
+
 namespace Dsh.RemoteHost;
 
-/** 谁给出了结局: 客户端自报名(或连接 id)与连接 id; host 自己取消时没有连接。 */
-public readonly record struct PendingResolver(string Name, string? ConnectionId)
+/** 谁给出了结局: 客户端自报名(或连接 id)、连接 id 以及可选的协作身份与角色; host 自己取消时没有连接。 */
+public readonly record struct PendingResolver(string Name, string? ConnectionId, string? PrincipalId = null, RoomRole? Role = null)
 {
     public static readonly PendingResolver Host = new("host", null);
 }
@@ -203,5 +205,14 @@ public sealed class HostPendingDecisions : IDisposable
         => HostNotification.Create(HostProtocol.NotificationPendingChanged, new RemotePendingChange(Snapshot(), resolution), HostProtocolJsonContext.Default.RemotePendingChange);
 
     private static RemotePendingResolved Resolved(string requestId, PendingEntry entry, string resolution, PendingResolver resolver)
-        => new(requestId, entry.Kind, entry.SessionId, resolution, resolver.Name, resolver.ConnectionId);
+    {
+        var resolvedBy = resolver.PrincipalId is null && resolver.Role is null
+            ? resolver.Name
+            : resolver.Role is { } role
+                ? resolver.PrincipalId is { Length: > 0 } principal && !string.Equals(resolver.Name, principal, StringComparison.Ordinal)
+                    ? $"{resolver.Name} ({principal}, {role})"
+                    : $"{resolver.Name} ({role})"
+                : $"{resolver.Name} ({resolver.PrincipalId})";
+        return new(requestId, entry.Kind, entry.SessionId, resolution, resolvedBy, resolver.ConnectionId);
+    }
 }

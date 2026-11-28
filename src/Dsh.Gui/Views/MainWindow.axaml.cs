@@ -86,8 +86,11 @@ public sealed partial class MainWindow : Window
         workspace.Notifications.IsForeground = () => IsActive;
         workspace.Notifications.DesktopNotify = DesktopNotifier.Create();
         workspace.RegisterHostPages(IconGeometry("Icon.Folder"), IconGeometry("Icon.Git"), IconGeometry("Icon.Machine"));
+        workspace.RegisterMeshPage(MeshIcon);
         workspace.Start();
     }
+
+    private static readonly Geometry MeshIcon = StreamGeometry.Parse("M12,4 A2.5,2.5 0 1 1 12,9 A2.5,2.5 0 1 1 12,4 M5,16 A2.5,2.5 0 1 1 5,21 A2.5,2.5 0 1 1 5,16 M19,16 A2.5,2.5 0 1 1 19,21 A2.5,2.5 0 1 1 19,16 M10.5,8.5 L6.5,16.5 M13.5,8.5 L17.5,16.5 M7.5,18.5 L16.5,18.5");
 
     private Geometry IconGeometry(string key) => (Geometry)this.FindResource(key)!;
 

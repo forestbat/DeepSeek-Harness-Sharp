@@ -42,6 +42,7 @@ public sealed class WorkspacePages
     public const string Files = "files";
     public const string Git = "git";
     public const string Machines = "machines";
+    public const string Mesh = "Mesh";
 
     private readonly Dictionary<string, WorkspacePageEntry> _defaults = new(StringComparer.Ordinal);
 

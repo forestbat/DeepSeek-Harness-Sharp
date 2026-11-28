@@ -2,6 +2,8 @@ using StreamJsonRpc;
 using System.Security.Cryptography;
 using System.Text;
 using Dsh.Core;
+using Dsh.GitInspect;
+using Dsh.Ide;
 using Dsh.Ide.Bridge;
 using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
@@ -31,6 +33,9 @@ public sealed class RemoteHostServer(
 {
     /** JSON-RPC server-defined error code: a method other than hello was called before a successful hello. */
     private const int NotAuthenticated = -32001;
+
+    /** JSON-RPC server-defined error code: the connection's role is not permitted to perform the requested operation. */
+    public const int Unauthorized = -32003;
 
     private readonly IRemoteHostBackend? _backend = backend;
     private long _connectionSequence;
@@ -70,6 +75,13 @@ public sealed class RemoteHostServer(
         if (backend.Editor is not null) capabilities.Add(EditorProtocol.Capability);
         if (backend.Editor?.Clients is not null) capabilities.Add(EditorProtocol.ClientCapability);
         if (backend.Session is IRemoteLogSliceBackend) capabilities.Add(HostProtocol.LogSliceCapability);
+        if (backend.Mesh is { } mesh)
+        {
+            if (mesh.SupportsMesh) capabilities.Add(MeshProtocol.CapabilityMesh);
+            if (mesh.SupportsRooms) capabilities.Add(MeshProtocol.CapabilityRooms);
+            if (mesh.SupportsDiscovery) capabilities.Add(MeshProtocol.CapabilityDiscovery);
+            if (mesh.SupportsChannels) capabilities.Add(MeshProtocol.CapabilityChannels);
+        }
         return capabilities;
     }
 
@@ -135,6 +147,15 @@ public sealed class RemoteHostServer(
         RemoteHostEndpoint.DefaultRoot(),
         Capabilities);
 
+    private enum HostAction
+    {
+        Read,
+        SendMessage,
+        MutateSession,
+        Approve,
+        Admin,
+    }
+
     /** 一条连接的处理与推送状态。 */
     private sealed class Connection(RemoteHostServer server, string id, CancellationToken lifetime) : IHostRpc
     {
@@ -142,16 +163,28 @@ public sealed class RemoteHostServer(
         private readonly KeyedPumps _ptyPumps = new(lifetime);
         private readonly List<HostSubscription> _subscriptions = [];
         private string? _clientName;
+        private string? _principalId;
+        private RoomRole _role = RoomRole.Owner;
+        private bool _inviteAuthenticated;
+        private bool _allowCollaboratorApprovals;
 
         /** With a host token every method but hello waits for a successful hello; without one the connection is trusted from the start. */
         private volatile bool _authenticated = !server.RequiresToken;
         private bool _stopped;
         private Task? _hostPushes;
-        private HostNetworkMethods? _network;
+        private RoleGuardedNetworkRpc? _network;
         private HostEditorMethods? _editor;
         private IHostPush? _push;
-    
-        private PendingResolver Resolver => new(_clientName ?? id, id);
+
+        private PendingResolver Resolver => _inviteAuthenticated || _principalId is not null
+            ? new(_clientName ?? _principalId ?? id, id, _principalId ?? _clientName, _role)
+            : new(_clientName ?? id, id);
+
+        private HostMeshCaller MeshCaller => new(
+            id,
+            _principalId ?? _clientName ?? id,
+            _clientName ?? _principalId,
+            _role);
 
         /** Chunked uploads started on this connection; discarded when it ends. */
         public HostUploads Uploads { get; } = new();
@@ -164,31 +197,54 @@ public sealed class RemoteHostServer(
 
         /** 各域自己的 RPC 目标; 只有 backend 提供了该域时才注册, 客户端据此走能力协商。 */
         /** 编辑器域的方法名委托; 域没有编辑器后端时为空。 */
-    public (string Method, Delegate Handler)[] EditorMethods() => _editor?.Methods() ?? [];
+        public (string Method, Delegate Handler)[] EditorMethods()
+        {
+            if (_editor is not { } editor)
+                return [];
+            return
+            [
+                (EditorProtocol.MethodList, (Func<RemoteEditorList?, CancellationToken, Task<EditorRemoteList>>)((request, ct) => { Authorize(HostAction.Read); return editor.ListAsync(request, ct); })),
+                (EditorProtocol.MethodStatus, (Func<RemoteEditorWorkspace, CancellationToken, Task<EditorRemoteStatus>>)((request, ct) => { Authorize(HostAction.Read); return editor.StatusAsync(request, ct); })),
+                (EditorProtocol.MethodDoctor, (Func<RemoteEditorWorkspace, CancellationToken, Task<IReadOnlyList<EditorDiagnostic>>>)((request, ct) => { Authorize(HostAction.Read); return editor.DoctorAsync(request, ct); })),
+                (EditorProtocol.MethodOpen, (Func<RemoteEditorOpen, CancellationToken, Task<EditorResult>>)((request, ct) => { Authorize(HostAction.MutateSession); return editor.OpenAsync(request, ct); })),
+                (EditorProtocol.MethodCancel, (Func<RemoteEditorCancel, CancellationToken, Task<bool>>)((request, ct) => { Authorize(HostAction.MutateSession); return editor.CancelAsync(request, ct); })),
+                (EditorProtocol.MethodRegister, (Func<RemoteEditorClientRegistration, CancellationToken, Task<bool>>)((request, ct) => { Authorize(HostAction.MutateSession); return editor.RegisterAsync(request, ct); })),
+                (EditorProtocol.MethodSelect, (Func<RemoteEditorSelect, CancellationToken, Task<bool>>)((request, ct) => { Authorize(HostAction.MutateSession); return editor.SelectAsync(request, ct); })),
+                (EditorProtocol.MethodUnregister, (Func<CancellationToken, Task<bool>>)(ct => { Authorize(HostAction.MutateSession); return editor.UnregisterAsync(ct); })),
+            ];
+        }
 
-    public IReadOnlyList<JsonRpcTarget> CreateTargets()
+        public IReadOnlyList<JsonRpcTarget> CreateTargets()
         {
             if (server._backend is not { } backend)
                 return [];
             List<JsonRpcTarget> targets = [];
             var uploads = Uploads;
-            if (backend.Agent is { } agent) targets.Add(new(RpcTargetMetadata.FromShape<IAgentRpc>(), new HostAgentMethods(agent, EnsureAuthenticated)));
+            if (backend.Agent is { } agent)
+                targets.Add(new(RpcTargetMetadata.FromShape<IAgentRpc>(), new RoleGuardedAgentRpc(new HostAgentMethods(agent, EnsureAuthenticated), Authorize)));
             if (backend.Pty is { } pty)
-                targets.Add(new(RpcTargetMetadata.FromShape<IPtyRpc>(), new HostPtyMethods(pty, EnsureAuthenticated, (subscriptionId, ptyId) => StartPtyPumpAsync(pty, subscriptionId, ptyId), _ptyPumps.Stop)));
-            if (backend.Files is { } files) targets.Add(new(RpcTargetMetadata.FromShape<IFilesRpc>(), new HostFileMethods(files, uploads, EnsureAuthenticated)));
-            if (backend.Git is { } git) targets.Add(new(RpcTargetMetadata.FromShape<IGitRpc>(), new HostGitMethods(git, EnsureAuthenticated)));
-            if (backend.Notifications is { } notifications) targets.Add(new(RpcTargetMetadata.FromShape<INotificationsRpc>(), new HostNotifyMethods(notifications, EnsureAuthenticated)));
-            if (backend.SessionEditing is { } editing) targets.Add(new(RpcTargetMetadata.FromShape<ISessionEditingRpc>(), new HostSessionEditingMethods(editing, EnsureAuthenticated)));
-            if (backend.Plugins is { } plugins) targets.Add(new(RpcTargetMetadata.FromShape<IPluginsRpc>(), new HostPluginsMethods(plugins, EnsureAuthenticated)));
+                targets.Add(new(RpcTargetMetadata.FromShape<IPtyRpc>(), new RoleGuardedPtyRpc(new HostPtyMethods(pty, EnsureAuthenticated, (subscriptionId, ptyId) => StartPtyPumpAsync(pty, subscriptionId, ptyId), _ptyPumps.Stop), Authorize)));
+            if (backend.Files is { } files)
+                targets.Add(new(RpcTargetMetadata.FromShape<IFilesRpc>(), new RoleGuardedFilesRpc(new HostFileMethods(files, uploads, EnsureAuthenticated), Authorize)));
+            if (backend.Git is { } git)
+                targets.Add(new(RpcTargetMetadata.FromShape<IGitRpc>(), new RoleGuardedGitRpc(new HostGitMethods(git, EnsureAuthenticated), Authorize)));
+            if (backend.Notifications is { } notifications)
+                targets.Add(new(RpcTargetMetadata.FromShape<INotificationsRpc>(), new RoleGuardedNotificationsRpc(new HostNotifyMethods(notifications, EnsureAuthenticated), Authorize)));
+            if (backend.SessionEditing is { } editing)
+                targets.Add(new(RpcTargetMetadata.FromShape<ISessionEditingRpc>(), new RoleGuardedSessionEditingRpc(new HostSessionEditingMethods(editing, EnsureAuthenticated), Authorize)));
+            if (backend.Plugins is { } plugins)
+                targets.Add(new(RpcTargetMetadata.FromShape<IPluginsRpc>(), new RoleGuardedPluginsRpc(new HostPluginsMethods(plugins, EnsureAuthenticated), Authorize)));
             if (backend.Network is { } network)
             {
-                _network = new HostNetworkMethods(network, EnsureAuthenticated, network as IRemoteNetworkReloadBackend, lifetime);
+                _network = new RoleGuardedNetworkRpc(new HostNetworkMethods(network, EnsureAuthenticated, network as IRemoteNetworkReloadBackend, lifetime), Authorize);
                 targets.Add(new(RpcTargetMetadata.FromShape<INetworkRpc>(), _network));
             }
             if (backend.Editor is { } editor)
             {
                 _editor = new HostEditorMethods(editor, EnsureAuthenticated, id, lifetime);
             }
+            if (backend.Mesh is { } mesh)
+                targets.Add(new(RpcTargetMetadata.FromShape<IMeshRpc>(), new HostMeshMethods(mesh, Authorize, () => MeshCaller)));
             return targets;
         }
 
@@ -227,26 +283,76 @@ public sealed class RemoteHostServer(
                 throw new LocalRpcException($"call {HostProtocol.MethodHello} with the host token first") { ErrorCode = NotAuthenticated };
         }
 
+        private void Authorize(HostAction action)
+        {
+            EnsureAuthenticated();
+            var allowed = _role switch
+            {
+                RoomRole.Owner => true,
+                RoomRole.Approver => action != HostAction.Admin,
+                RoomRole.Collaborator => action switch
+                {
+                    HostAction.Read or HostAction.SendMessage or HostAction.MutateSession => true,
+                    HostAction.Approve => _allowCollaboratorApprovals,
+                    _ => false,
+                },
+                _ => action == HostAction.Read,
+            };
+            if (!allowed)
+                throw new LocalRpcException($"role {_role} is not authorized to perform this operation") { ErrorCode = Unauthorized };
+        }
+
         public async Task<HostHelloResponse> HelloAsync(HostHelloRequest request, CancellationToken cancellationToken)
         {
             var token = server.Token;
-            var tokenOk = token is null
-                || (request.Token is { } presented
-                    && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(token)));
+            var hasInvite = !string.IsNullOrWhiteSpace(request.InviteToken);
+            var explicitTokenValid = request.Token is { } presented
+                && token is not null
+                && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(token));
             var versionOk = request.ProtocolVersion == HostProtocol.Version;
-            var mismatch = !tokenOk
-                ? "invalid token"
-                : (!versionOk
-                    ? $"protocol version mismatch: client {request.ProtocolVersion}, host {HostProtocol.Version}"
-                    : null);
+            HostConnectionIdentity? invited = null;
+            string? mismatch = null;
+
+            if (!versionOk)
+                mismatch = $"protocol version mismatch: client {request.ProtocolVersion}, host {HostProtocol.Version}";
+            else if (token is not null && request.Token is not null && !explicitTokenValid)
+                mismatch = "invalid token";
+            else if (hasInvite)
+            {
+                invited = server._backend?.Mesh is { } mesh
+                    ? await mesh.ResolveInviteAsync(request.InviteToken!, request.PrincipalId, request.ClientName, cancellationToken).ConfigureAwait(false)
+                    : null;
+                if (invited is null)
+                    mismatch = "invalid invite token";
+            }
+            else if (token is not null && !explicitTokenValid)
+                mismatch = "invalid token";
+
             if (mismatch is null)
-                await AuthenticateAsync(request.ClientName).ConfigureAwait(false);
-            return new HostHelloResponse(mismatch is null, HostProtocol.Version, HostProtocol.ReleaseVersion, mismatch, server.Capabilities, id);
+            {
+                await AuthenticateAsync(request.ClientName, request.PrincipalId, invited).ConfigureAwait(false);
+                return new HostHelloResponse(true, HostProtocol.Version, HostProtocol.ReleaseVersion, null, server.Capabilities, id, _role.ToString());
+            }
+            return new HostHelloResponse(false, HostProtocol.Version, HostProtocol.ReleaseVersion, mismatch, server.Capabilities, id);
         }
 
-        private async Task AuthenticateAsync(string? clientName)
+        private async Task AuthenticateAsync(string? clientName, string? principalId, HostConnectionIdentity? invited)
         {
             _clientName = string.IsNullOrWhiteSpace(clientName) ? null : clientName;
+            if (invited is not null)
+            {
+                _inviteAuthenticated = true;
+                _principalId = invited.PrincipalId;
+                _role = invited.Role;
+                _allowCollaboratorApprovals = invited.AllowCollaboratorApprovals;
+            }
+            else
+            {
+                _inviteAuthenticated = false;
+                _principalId = string.IsNullOrWhiteSpace(principalId) ? null : principalId;
+                _role = RoomRole.Owner;
+                _allowCollaboratorApprovals = false;
+            }
             if (_authenticated)
                 return;
             await StartHostPushesAsync().ConfigureAwait(false);
@@ -263,25 +369,25 @@ public sealed class RemoteHostServer(
 
         public async Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             return await Backend.Session.ListSessionsAsync(cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<RemoteSessionSummary> CreateSessionAsync(RemoteSessionCreateRequest request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.MutateSession);
             return await Backend.Session.CreateSessionAsync(request.Cwd, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<RemoteSessionSummary> ResumeSessionAsync(RemoteSessionRef request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.MutateSession);
             return await Backend.Session.ResumeSessionAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<RemoteSubscriptionRef> SubscribeAsync(RemoteSubscribeRequest request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             var backend = Backend;
             await _eventPumps.StartAsync(request.SubscriptionId,
                 token => backend.Session.SubscribeAsync(request.SessionId, request.FromSeq, token),
@@ -291,28 +397,28 @@ public sealed class RemoteHostServer(
 
         public Task<bool> UnsubscribeAsync(RemoteSubscriptionRef request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             _eventPumps.Stop(request.SubscriptionId);
             return Task.FromResult(true);
         }
 
         public async Task<bool> SendMessageAsync(RemoteMessageRequest request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.SendMessage);
             await Backend.Session.SendMessageAsync(request.SessionId, request.Text, request.Images ?? [], cancellationToken).ConfigureAwait(false);
             return true;
         }
 
         public async Task<bool> InterruptAsync(RemoteSessionRef request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.MutateSession);
             await Backend.Session.InterruptAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
             return true;
         }
 
         public async Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(RemoteSessionSnapshotRequest request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             var backend = Backend;
             var snapshot = await backend.Session
                 .GetSessionSnapshotAsync(request.SessionId, request.FromEvent, request.MaxEvents, cancellationToken)
@@ -327,7 +433,7 @@ public sealed class RemoteHostServer(
         /** 日志字节切片: 只是把范围交给后端按帧切字节, 不做任何物化/序列化。 */
         public Task<RemoteLogSlice> GetSessionLogSliceAsync(RemoteLogSliceRequest request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             if (Backend.Session is not IRemoteLogSliceBackend slices)
                 throw new InvalidOperationException($"session history is not served as bytes: {request.SessionId}");
             return slices.GetSessionLogSliceAsync(request.SessionId, request.FromEvent, request.MaxEvents, cancellationToken);
@@ -335,31 +441,31 @@ public sealed class RemoteHostServer(
 
         public async Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             return await Backend.Session.ListToolsAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
         }
 
         public Task<IReadOnlyList<RemoteSessionSummary>> ListRegistryAsync(CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             return Task.FromResult(Backend.Sessions.List());
         }
 
         public Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Read);
             return Task.FromResult(Backend.Pending.List());
         }
 
         public Task<bool> RespondApprovalAsync(RemoteApprovalResponse request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Approve);
             return Task.FromResult(Backend.Pending.RespondApproval(request, Resolver));
         }
 
         public Task<bool> RespondQuestionAsync(RemoteQuestionResponse request, CancellationToken cancellationToken)
         {
-            EnsureAuthenticated();
+            Authorize(HostAction.Approve);
             return Task.FromResult(Backend.Pending.RespondQuestion(request, Resolver));
         }
 
@@ -384,6 +490,8 @@ public sealed class RemoteHostServer(
                 subscriptions.Add(backend.Sessions.Subscribe());
                 if (backend.Notifications is { } notifications)
                     subscriptions.Add(await notifications.SubscribeAsync(lifetime).ConfigureAwait(false));
+                if (backend.Mesh is { } mesh)
+                    subscriptions.Add(await mesh.SubscribeAsync(lifetime).ConfigureAwait(false));
                 lock (_subscriptions)
                 {
                     if (_stopped)
@@ -420,8 +528,21 @@ public sealed class RemoteHostServer(
                 (HostProtocol.NotificationPendingChanged, { } push) => push.PendingChangedAsync(Deserialize(notification, HostProtocolJsonContext.Default.RemotePendingChange)),
                 (HostProtocol.NotificationSessionsChanged, { } push) => push.SessionsChangedAsync(Deserialize(notification, HostProtocolJsonContext.Default.RemoteSessionChange)),
                 (NotificationsProtocol.NotificationNotifyChanged, { } push) => push.NotifyChangedAsync(Deserialize(notification, NotificationsProtocolJsonContext.Default.RemoteNotificationChange)),
+                (MeshProtocol.NotificationMeshChanged, { } push) => PushMeshChangedSafelyAsync(push, Deserialize(notification, MeshProtocolJsonContext.Default.RemoteMeshChange)),
                 _ => Task.CompletedTask,
             };
+
+        private static async Task PushMeshChangedSafelyAsync(IHostPush push, RemoteMeshChange change)
+        {
+            try
+            {
+                await push.MeshChangedAsync(change).ConfigureAwait(false);
+            }
+            catch (RemoteInvocationException)
+            {
+                // Older clients do not implement host.mesh.changed; ignore method-not-found safely.
+            }
+        }
 
         private static T Deserialize<T>(HostNotification notification, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> info)
             => notification.Params is { } payload
@@ -552,5 +673,424 @@ public sealed class RemoteHostServer(
                     source.Cancel();
             }
         }
+    }
+
+    private sealed class HostMeshMethods(IRemoteMeshBackend backend, Action<HostAction> authorize, Func<HostMeshCaller> caller) : IMeshRpc
+    {
+        public Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ListAgentsAsync(cancellationToken);
+        }
+
+        public Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return backend.CreateAgentAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<AgentProfile> WakeAgentAsync(RemoteMeshAgentRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return backend.WakeAgentAsync(request.AgentId, caller(), cancellationToken);
+        }
+
+        public Task<bool> SuspendAgentAsync(RemoteMeshAgentRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return backend.SuspendAgentAsync(request.AgentId, caller(), cancellationToken);
+        }
+
+        public Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return backend.SendToAgentAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<IReadOnlyList<RemoteExecutionTarget>> ListTargetsAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ListTargetsAsync(cancellationToken);
+        }
+
+        public Task<IReadOnlyList<CollaborationRoom>> ListRoomsAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ListRoomsAsync(cancellationToken);
+        }
+
+        public Task<CollaborationRoom> CreateRoomAsync(RemoteRoomCreateRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return backend.CreateRoomAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<RoomInvite> CreateInviteAsync(RemoteRoomInviteRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return backend.CreateInviteAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<CollaborationRoom> JoinRoomAsync(RemoteRoomJoinRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.SendMessage);
+            return backend.JoinRoomAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<RoomMessage> PostRoomMessageAsync(RemoteRoomPostRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.SendMessage);
+            return backend.PostRoomMessageAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<IReadOnlyList<RoomMessage>> ReadRoomMessagesAsync(RemoteRoomMessagesRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ReadRoomMessagesAsync(request, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.DiscoverAgentsAsync(request, cancellationToken);
+        }
+
+        public Task<AgentTrustRecord> GrantTrustAsync(RemoteTrustGrantRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return backend.GrantTrustAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<AgentTrustRecord> RevokeTrustAsync(RemoteTrustRevokeRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return backend.RevokeTrustAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<IReadOnlyList<AgentTrustRecord>> ListTrustAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ListTrustAsync(cancellationToken);
+        }
+
+        public Task<IReadOnlyList<ChannelBinding>> ListChannelsAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ListChannelsAsync(cancellationToken);
+        }
+
+        public Task<ChannelBinding> BindChannelAsync(ChannelBinding request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return backend.BindChannelAsync(request, caller(), cancellationToken);
+        }
+
+        public Task<IReadOnlyList<AutomationTriggerRule>> ListTriggersAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return backend.ListTriggersAsync(cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedAgentRpc(IAgentRpc inner, Action<HostAction> authorize) : IAgentRpc
+    {
+        public Task<IReadOnlyList<RemoteAgentCatalogEntry>> CatalogAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.CatalogAsync(cancellationToken);
+        }
+
+        public Task<RemoteSessionSummary> StartAsync(RemoteAgentStartRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.StartAsync(request, cancellationToken);
+        }
+
+        public Task<bool> PromptAsync(RemoteAgentPrompt request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.PromptAsync(request, cancellationToken);
+        }
+
+        public Task<bool> CancelAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.CancelAsync(request, cancellationToken);
+        }
+
+        public Task<bool> StopAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.StopAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteSessionSummary> ResumeAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.ResumeAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedPtyRpc(IPtyRpc inner, Action<HostAction> authorize) : IPtyRpc
+    {
+        public Task<RemotePtyRef> StartAsync(RemotePtyStartRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.StartAsync(request, cancellationToken);
+        }
+
+        public Task<bool> WriteAsync(RemotePtyInput request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.WriteAsync(request, cancellationToken);
+        }
+
+        public Task<bool> StopAsync(RemotePtyRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.StopAsync(request, cancellationToken);
+        }
+
+        public Task<bool> AttachAsync(RemotePtyAttachRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.AttachAsync(request, cancellationToken);
+        }
+
+        public Task<bool> DetachAsync(RemoteSubscriptionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.DetachAsync(request, cancellationToken);
+        }
+
+        public Task<bool> ResizeAsync(RemotePtyResize request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.ResizeAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedFilesRpc(IFilesRpc inner, Action<HostAction> authorize) : IFilesRpc
+    {
+        public Task<RemoteFileContent> ReadFileAsync(RemoteFilePath request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ReadFileAsync(request, cancellationToken);
+        }
+
+        public Task<bool> WriteFileAsync(RemoteFileContent request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.WriteFileAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteDirectoryListing> ListDirectoryAsync(RemoteFilePath request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ListDirectoryAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteFileStat> StatAsync(RemoteFilePath request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.StatAsync(request, cancellationToken);
+        }
+
+        public Task<bool> CreateDirectoryAsync(RemoteFilePath request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.CreateDirectoryAsync(request, cancellationToken);
+        }
+
+        public Task<bool> RenameAsync(RemoteFsRename request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.RenameAsync(request, cancellationToken);
+        }
+
+        public Task<bool> DeleteAsync(RemoteFsDelete request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.DeleteAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteUploadRef> BeginUploadAsync(RemoteUploadBegin request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.BeginUploadAsync(request, cancellationToken);
+        }
+
+        public Task<long> UploadChunkAsync(RemoteUploadChunk request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.UploadChunkAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteFileStat> CommitUploadAsync(RemoteUploadCommit request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.CommitUploadAsync(request, cancellationToken);
+        }
+
+        public Task<bool> AbortUploadAsync(RemoteUploadRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.AbortUploadAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteFileChunk> DownloadAsync(RemoteDownloadRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.DownloadAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedGitRpc(IGitRpc inner, Action<HostAction> authorize) : IGitRpc
+    {
+        public Task<GitStatus> StatusAsync(RemoteGitRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.StatusAsync(request, cancellationToken);
+        }
+
+        public Task<GitDiff> DiffAsync(RemoteGitDiffRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.DiffAsync(request, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<GitCommitSummary>> LogAsync(RemoteGitLogRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.LogAsync(request, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(RemoteGitRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ListWorktreesAsync(request, cancellationToken);
+        }
+
+        public Task<GitWorktree> AddWorktreeAsync(RemoteGitWorktreeAdd request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.AddWorktreeAsync(request, cancellationToken);
+        }
+
+        public Task<bool> RemoveWorktreeAsync(RemoteGitWorktreeRemove request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.RemoveWorktreeAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedNotificationsRpc(INotificationsRpc inner, Action<HostAction> authorize) : INotificationsRpc
+    {
+        public Task<RemoteNotifyPage> ListAsync(RemoteNotifyQuery? request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ListAsync(request, cancellationToken);
+        }
+
+        public Task<int> MarkReadAsync(RemoteNotifyMarkRead request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.SendMessage);
+            return inner.MarkReadAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedSessionEditingRpc(ISessionEditingRpc inner, Action<HostAction> authorize) : ISessionEditingRpc
+    {
+        public Task<RemoteCommandResult> ExecuteCommandAsync(RemoteCommandRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.SendMessage);
+            return inner.ExecuteCommandAsync(request, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<RemoteCommandDescriptor>> ListCommandsAsync(RemoteCommandRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ListCommandsAsync(request, cancellationToken);
+        }
+
+        public Task<bool> RenameAsync(RemoteSessionRenameRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.RenameAsync(request, cancellationToken);
+        }
+
+        public Task<bool> DeleteAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.DeleteAsync(request, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<RemoteTimelineEntry>> SessionTimelineAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.SessionTimelineAsync(request, cancellationToken);
+        }
+
+        public Task<bool> SetApprovalPolicyAsync(RemoteSessionPolicyRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.MutateSession);
+            return inner.SetApprovalPolicyAsync(request, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ListSubagentsAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedPluginsRpc(IPluginsRpc inner, Action<HostAction> authorize) : IPluginsRpc
+    {
+        public Task<IReadOnlyList<RemotePluginInfo>> ListAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ListAsync(cancellationToken);
+        }
+
+        public Task<string> SetPermissionAsync(RemotePluginPermissionRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return inner.SetPermissionAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class RoleGuardedNetworkRpc(HostNetworkMethods inner, Action<HostAction> authorize) : INetworkRpc, IAsyncDisposable
+    {
+        public Task<RemoteOutboundProxyState> GetOutboundAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.GetOutboundAsync(cancellationToken);
+        }
+
+        public Task<RemoteOutboundProxyState> SetOutboundAsync(RemoteOutboundProxySetRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return inner.SetOutboundAsync(request, cancellationToken);
+        }
+
+        public Task<RemoteOutboundProxyProbeResult> ProbeAsync(RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.ProbeAsync(request, cancellationToken);
+        }
+
+        public Task<bool> CancelProbeAsync(RemoteOutboundProxyProbeCancelRequest request, CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Read);
+            return inner.CancelProbeAsync(request, cancellationToken);
+        }
+
+        public Task<bool> ReloadAsync(CancellationToken cancellationToken)
+        {
+            authorize(HostAction.Admin);
+            return inner.ReloadAsync(cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }

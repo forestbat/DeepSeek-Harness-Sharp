@@ -13,6 +13,7 @@ namespace Dsh.Host;
 internal sealed class HarnessRemoteRuntime(HarnessApp app, HostSessionRegistry sessions, HostPendingDecisions pending, HarnessSessionTracker tracker)
 {
     private readonly ConcurrentDictionary<string, AgentHandle> _handles = new(StringComparer.Ordinal);
+    private IDisposable? _acpExecutionRegistration;
 
     internal HarnessApp App => app;
 
@@ -55,8 +56,18 @@ internal sealed class HarnessRemoteRuntime(HarnessApp app, HostSessionRegistry s
             handle.Dispose.Dispose();
     }
 
+    internal void RegisterAcpExecutionBackend(ExternalAgentSessions agents)
+    {
+        if (_acpExecutionRegistration is not null)
+            return;
+        if (app.Ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName, strict: false) is { } router)
+            _acpExecutionRegistration = router.RegisterBackend(new AcpAgentExecutionBackend(agents, sessions));
+    }
+
     internal void DisposeHandles()
     {
+        _acpExecutionRegistration?.Dispose();
+        _acpExecutionRegistration = null;
         foreach (var handle in _handles.Values)
             handle.Dispose.Dispose();
         _handles.Clear();

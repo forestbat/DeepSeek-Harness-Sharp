@@ -20,6 +20,7 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
     private readonly ExternalAgentSessions _agents;
     private readonly HarnessDecisionBridge _decisions;
     private readonly HarnessSessionTracker _tracker;
+    private readonly HarnessRemoteMeshBackend _mesh;
 
     private HarnessRemoteHostBackend(HarnessApp app, AcpSessionServices services, HostPtySessions ptys, ExternalAgentSessions agents)
     {
@@ -36,6 +37,8 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
         _decisions = new HarnessDecisionBridge(app.Ctx, Pending);
         _tracker = new HarnessSessionTracker(app.Ctx, Sessions, Pending);
         _runtime = new HarnessRemoteRuntime(app, Sessions, Pending, _tracker);
+        _runtime.RegisterAcpExecutionBackend(agents);
+        _mesh = new HarnessRemoteMeshBackend(app.Ctx);
         Session = new HarnessRemoteSessionBackend(_runtime, agents);
         Agent = new HarnessRemoteAgentBackend(_runtime, Session, ptys, agents);
         Pty = new HarnessRemotePtyBackend(ptys);
@@ -77,12 +80,14 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
     public IRemotePluginsBackend? Plugins { get; }
     public IRemoteNetworkBackend? Network { get; }
     public IRemoteEditorBackend? Editor { get; }
+    public IRemoteMeshBackend Mesh => _mesh;
 
     public Task<HostInfo> InfoAsync(CancellationToken cancellationToken) => Task.FromResult(_info);
 
     /** Stop notifications first; release decisions before agents; persist the registry after daemon owners detach. */
     public async ValueTask DisposeAsync()
     {
+        _mesh.Dispose();
         await Notifications.DisposeAsync().ConfigureAwait(false);
         _decisions.Dispose();
         Pending.Dispose();
