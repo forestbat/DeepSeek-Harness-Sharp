@@ -78,14 +78,17 @@ public sealed class SessionLogIndex
     }
 
     /** 覆盖 [offset, offset + count) 的帧下标区间(含两端)。 */
-    public (int From, int To) FramesCovering(long offset, long count)
+    public (int From, int To) FramesCovering(long offset, long count) => Covering(Frames, offset, count);
+
+    /** 覆盖 `[offset, offset + count)` 的帧下标区间(含两端); 没有任何帧覆盖时返回 `(-1, -1)`。 */
+    public static (int From, int To) Covering(IReadOnlyList<FrameEntry> frames, long offset, long count)
     {
         var end = offset + count;
         var from = -1;
         var to = -1;
-        for (var index = 0; index < Frames.Count; index += 1)
+        for (var index = 0; index < frames.Count; index += 1)
         {
-            var frame = Frames[index];
+            var frame = frames[index];
             if (frame.EventCount == 0)
                 continue;
             var frameEnd = frame.FirstSeq + frame.EventCount;

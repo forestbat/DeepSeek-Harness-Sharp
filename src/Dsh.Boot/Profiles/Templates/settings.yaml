@@ -627,6 +627,16 @@ plugins:
 #     max_bytes:
 #     落盘结果保留天数
 #     retain_days:
+#   会话后端: 缺省跟现状一样是 jsonl 目录; 选了 database 就用本地库(库不存在时自动从 jsonl 导入)
+#   session_store:
+#     `jsonl`(默认) 或 `database`
+#     backend:
+#     库文件; 留空用 `<持久化根>/sessions.db`
+#     database:
+#     提交道数; 留空用 min(4, CPU/2)
+#     lanes:
+#     `sync`(默认) 或 `io_uring`(Linux 内核 ≥5.19, 不可用时自动退回同步)
+#     io:
 #   会话目录
 #   sessions:
 #   日志目录

@@ -281,7 +281,24 @@ public static class ZstdFrames
     }
 
     public static byte[] DecompressFrame(ReadOnlySpan<byte> frame, int frameStart)
-        => DecompressFrame(frame.ToArray(), 0, frame.Length, frameStart);
+    {
+        // 不为了"给流式解压器喂输入"复制一份帧字节: 先按帧头声明的明文长度一次解到位,
+        // 声明不可信(外部写入方的坏 content size / 截断帧)才退回一次复制 + 流式。
+        if (ZstandardDecoder.TryGetMaxDecompressedLength(frame, out var max) && max is > 0 and <= int.MaxValue)
+        {
+            var plain = new byte[max];
+            if (ZstandardDecoder.TryDecompress(frame, plain, out var written) && written == plain.Length)
+                return plain;
+        }
+        try
+        {
+            return DecompressBytes(frame.ToArray(), 0, frame.Length, Math.Max(1024, frame.Length * 4));
+        }
+        catch (Exception error)
+        {
+            throw new FormatException($"corrupt Zstandard session log: frame at byte {frameStart} failed validation", error);
+        }
+    }
 
     /**
      * 直接从一块缓冲里的一段解压: 不复制输入字节。
@@ -418,6 +435,16 @@ public static class ZstdFrames
     /** 长度不可知时退回边解边扩容: 输入仍不复制, 明文只多一次 ToArray。 */
     private static byte[] DecompressBytes(byte[] source, int offset, int length, int capacity)
     {
+        // 一条事件一帧的日志有上百万帧: 每次 new ZstandardStream 都带着输入/输出两个 MemoryStream、
+        // 一次 ToArray 拷贝和一个解压上下文(实测上下文创建占冷开 CPU 的 0.9%)。
+        // 这里先按帧头声明的明文长度一次解到位; 声明不可信再退回流式(截断帧、外部写入方的坏 content size)。
+        if (ZstandardDecoder.TryGetMaxDecompressedLength(source.AsSpan(offset, length), out var max)
+            && max is > 0 and <= int.MaxValue)
+        {
+            var plain = new byte[max];
+            if (ZstandardDecoder.TryDecompress(source.AsSpan(offset, length), plain, out var written) && written == plain.Length)
+                return plain;
+        }
         using var input = new MemoryStream(source, offset, length, writable: false);
         using var stream = new ZstandardStream(input, CompressionMode.Decompress);
         using var output = new MemoryStream(capacity);

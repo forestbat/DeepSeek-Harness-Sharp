@@ -14,10 +14,29 @@
     <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- 取引擎结果缓冲的只读区间(零拷贝解码), 唯一用到指针的地方在 Database/TursoDatabase.cs。 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      原生库的 RID: 发布用 -r 指定的那个, 普通构建用构建机的 RID。
+      只拷这一个 RID 的库(整包 runtimes/ 是 11 个 RID、约 489MB), 见方案 §9。
+    -->
+    <DshTursoRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</DshTursoRid>
+    <DshTursoRid Condition="'$(DshTursoRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</DshTursoRid>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 只取原生库(turso_sdk_kit), 不引用任何托管门面: 产品路径直调 turso.h 的 C ABI。 -->
+    <PackageReference Include="Turso.Data.Native" Version="0.8.3" GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+    <None Include="$(PkgTurso_Data_Native)/runtimes/$(DshTursoRid)/native/*"
+          Link="%(Filename)%(Extension)"
+          Visible="false"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Dsh.Tests" />
   </ItemGroup>
 
 </Project>
+

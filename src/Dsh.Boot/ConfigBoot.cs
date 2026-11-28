@@ -27,6 +27,7 @@ public static class ConfigBoot
             ctx.LoggerFor("settings").Warn("%s", settingsNotice);
         ctx.SetOwn("dshHomePath", home.Root);
         ctx.SetOwn(DshPaths.PropName, paths);
+        ctx.SetOwn(SessionStorageSettings.PropName, SessionStorage(settings));
         ctx.SetOwn("credentials", credentials);
         ctx.SetOwn("harnessOptions", options with { Home = home });
         ctx.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(ctx, settings.Network));
@@ -89,6 +90,7 @@ public static class ConfigBoot
         var home = HarnessStorage.ApplyStorageRoot(options.Home, settings);
         var context = new Context();
         context.SetOwn("dshHomePath", home.Root);
+        context.SetOwn(SessionStorageSettings.PropName, SessionStorage(settings));
         context.SetOwn("harnessOptions", options with { Home = home });
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
         _ = new SafetyPolicySource(context, HarnessSettings.CreatePolicyReader(home, settings));
@@ -114,6 +116,15 @@ public static class ConfigBoot
                 throw new AggregateException("plugin inspection dispose failed", errors);
         }
     }
+
+    /** `storage.session_store`: 会话后端的选择, 原样交给持久化插件(它自己决定 jsonl 还是本地库)。 */
+    private static SessionStorageSettings SessionStorage(HarnessSettings settings) => new()
+    {
+        Backend = settings.Storage?.SessionStore?.Backend ?? SessionStorageSettings.Jsonl,
+        Database = settings.Storage?.SessionStore?.Database,
+        Lanes = settings.Storage?.SessionStore?.Lanes,
+        Io = settings.Storage?.SessionStore?.Io ?? "sync",
+    };
 
     private static (PluginHost Host, PluginHost? Runtime, Func<INativePlugin, IDshPlugin>? NativeBridge) CreateRuntime(
         PluginRuntimeFactory? factory, Context context, PluginExecutionEnvironment environment,

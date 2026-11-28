@@ -598,6 +598,14 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
      * 索引缺失时先走一次全量解析(顺手重建索引), 之后就是按帧切字节。
      */
     public SessionLogSlice? TryReadLogSlice(SessionId id, long fromEvent, int maxEvents)
+        => TryReadLogFrames(id)?.ToSlice(fromEvent, maxEvents);
+
+    /**
+     * 逐帧交出整份日志(头帧 + 按区间读帧): 切片、导入、导出、交接都走这一个视图。
+     *
+     * `TryReadLogSlice` 会把一段日志拼成一个数组; 帧视图是惰性的, 383MB 的会话搬运时只在内存里留一帧。
+     */
+    internal SessionLogFrames? TryReadLogFrames(SessionId id)
     {
         if (_compression != JsonlCompression.Zstd)
             return null;
@@ -613,29 +621,60 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
         if (index is not { Frames.Count: > 1 })
             return null;
-        var total = index.EventCount;
-        if (total <= 0)
+        var entries = index.Frames;
+        var headerFrame = ReadFrameBytes(path, entries[0]);
+        if (headerFrame is null)
             return null;
+        var metadata = SessionLogHeader.ParseHeaderRecord(ZstdFrames.DecompressFrame(headerFrame, 0));
+        return new SessionLogFrames(metadata.Meta, metadata.InheritedEventCount, headerFrame, index.EventCount,
+            (fromEvent, maxEvents) => Covering(path, entries, fromEvent, maxEvents));
+    }
+
+    /**
+     * 按事件区间从文件读帧: 帧边界只落在行边界上, 所以交出的是"覆盖该区间的整帧"。
+     *
+     * **整段枚举共用一个句柄**: 现场那份 383MB 的会话是 104 万帧(一条事件一帧), 逐帧开关文件
+     * 就是上百万次 open —— `SessionLogWindowReader.ReadFramePlain` 那条注释记的正是这笔账
+     * (69,608 次打开 5.4 s vs 裸读全部字节 21 ms)。这里把句柄开在枚举外面, 每帧只 seek + read。
+     */
+    private static IEnumerable<SessionLogFrames.Frame> Covering(
+        string path, IReadOnlyList<FrameEntry> entries, long fromEvent, int maxEvents)
+    {
+        var total = entries[^1].FirstSeq + entries[^1].EventCount;
         var start = Math.Clamp(fromEvent, 0, total);
         var count = maxEvents > 0 ? Math.Min(maxEvents, total - start) : total - start;
-        var (from, to) = index.FramesCovering(start, count);
+        if (count <= 0)
+            yield break;
+        var (from, to) = SessionLogIndex.Covering(entries, start, count);
         if (from < 0)
-            return null;
-        var frames = new List<FrameEntry>(to - from + 2) { index.Frames[0] };
-        for (var slot = from; slot <= to; slot += 1)
-            frames.Add(index.Frames[slot]);
-        byte[] bytes;
+            yield break;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, LiveLogReadShare);
+        var buffer = Array.Empty<byte>();
+        for (var slot = Math.Max(1, from); slot <= to; slot += 1)
+        {
+            var entry = entries[slot];
+            var length = (int)(entry.End - entry.Start);
+            if (buffer.Length < length)
+                buffer = new byte[length];
+            stream.Position = entry.Start;
+            stream.ReadExactly(buffer, 0, length);
+            yield return new SessionLogFrames.Frame(entry.FirstSeq, entry.EventCount, buffer[..length])
+            {
+                MinReplaceStart = entry.MinReplaceStart,
+            };
+        }
+    }
+
+    private static byte[]? ReadFrameBytes(string path, FrameEntry entry)
+    {
         try
         {
-            bytes = ReadFrameRanges(path, frames, new int[frames.Count], out _);
+            return ReadFrameRanges(path, [entry], new int[1], out _);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             return null;
         }
-        var header = Stat(id)?.Header ?? throw new SessionPersistenceNotFoundException(id);
-        var eventCount = frames.Skip(1).Sum(frame => frame.EventCount);
-        return new SessionLogSlice(bytes, header, frames[1].FirstSeq, eventCount, total, SessionLogSlice.HashOf(bytes));
     }
 
     /**
@@ -1245,70 +1284,15 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     /** 检查点尾部信息: request/header 与 request/context 的折叠值(没有就是 null)。 */
-    private static byte[] EncodeSurfaceMeta(SurfaceFoldSnapshot fold)
-    {
-        var meta = new SurfaceFoldMeta(fold.RequestHeader, fold.RequestContext);
-        return JsonSerializer.SerializeToUtf8Bytes(meta, DshCoreJsonContext.Default.SurfaceFoldMeta);
-    }
+    private static byte[] EncodeSurfaceMeta(SurfaceFoldSnapshot fold) => SurfaceFoldCodec.EncodeMeta(fold);
 
     private static (EpochHeader? Header, RequestContextPayload? Context) DecodeSurfaceMeta(byte[] payload)
-    {
-        try
-        {
-            var meta = JsonSerializer.Deserialize(payload, DshCoreJsonContext.Default.SurfaceFoldMeta);
-            return (meta?.RequestHeader, meta?.RequestContext);
-        }
-        catch (JsonException)
-        {
-            return (null, null);
-        }
-    }
+        => SurfaceFoldCodec.DecodeMeta(payload);
 
-    /** 表面节点序号按差值 varint 存: 相邻序号通常只差几个到几百个。 */
-    private static byte[] EncodeSurfaceNodes(IReadOnlyList<long> nodes)
-    {
-        var buffer = new List<byte>(nodes.Count * 2);
-        long previous = 0;
-        foreach (var seq in nodes)
-        {
-            var delta = seq - previous;
-            previous = seq;
-            var value = (ulong)delta;
-            while (value >= 0x80)
-            {
-                buffer.Add((byte)(value | 0x80));
-                value >>= 7;
-            }
-            buffer.Add((byte)value);
-        }
-        return [.. buffer];
-    }
+    /** 表面节点序号按差值 varint 存: 相邻序号通常只差几个到几百个(编码与数据库后端共用)。 */
+    private static byte[] EncodeSurfaceNodes(IReadOnlyList<long> nodes) => SurfaceFoldCodec.EncodeNodes(nodes);
 
-    private static List<long> DecodeSurfaceNodes(byte[] payload, int count)
-    {
-        var nodes = new List<long>(count);
-        long previous = 0;
-        var cursor = 0;
-        while (cursor < payload.Length && nodes.Count < count)
-        {
-            ulong value = 0;
-            var shift = 0;
-            while (cursor < payload.Length)
-            {
-                var current = payload[cursor];
-                cursor += 1;
-                value |= (ulong)(current & 0x7F) << shift;
-                if ((current & 0x80) == 0)
-                    break;
-                shift += 7;
-            }
-            previous += (long)value;
-            nodes.Add(previous);
-        }
-        if (nodes.Count != count)
-            throw new FormatException("surface fold sidecar is truncated");
-        return nodes;
-    }
+    private static List<long> DecodeSurfaceNodes(byte[] payload, int count) => SurfaceFoldCodec.DecodeNodes(payload, count);
 
     /**
      * 就地修掉"末尾不属于任何事件"的字节, 返回修完之后的事件条数。
@@ -1577,54 +1561,12 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     /**
-     * 把一批事件编成若干帧: 逐条编码成存储行, 按行的**真实字节**攒到预算就收一帧。
-     *
-     * 预算按编码后的字节结算, 不预判"这条事件大概多大": 一行多大取决于它最终被编成什么
-     * (普通记录、还是打包行里的一个成员), 事前无从知道; 编完再量既精确又不必把最贵的一步做两次。
-     * 帧边界只落在行边界上 —— 一行是一条完整记录, 劈开就读不回来。
+     * 把一批事件编成若干帧: 切帧规则与数据库后端共用 `SessionFrameWriter` —— 两边切出同样的字节,
+     * `TryReadLogSlice` 的 ContentHash 才能在两个后端之间对得上。
      */
     private List<(byte[] Content, long FirstSeq, int EventCount, long MinReplaceStart)> EncodeEventFrames(IReadOnlyList<SessionEvent> events)
-    {
-        var records = ChunkRows.EncodeRecords(events, _packChunks);
-        var frames = new List<(byte[] Content, long FirstSeq, int EventCount, long MinReplaceStart)>();
-        var frame = new ArrayBufferWriter<byte>();
-        long firstSeq = 0;
-        var eventCount = 0;
-        var minReplaceStart = long.MaxValue;
-        foreach (var record in records)
-        {
-            // 每条记录只编码一次: 编码后的字节数就是它的真实体积, 预算按它结算, 不再另算一遍。
-            var line = Encoding.UTF8.GetBytes(record.Line);
-            var recordBytes = line.Length + 1;
-            // 一个空帧里也要能装下这一行: 单行超过预算时它独占一帧, 否则永远塞不进去。
-            if (eventCount > 0 && frame.WrittenCount + recordBytes > WriteBatch.MaxPlaintextBytes)
-            {
-                frames.Add(Materialize(frame, firstSeq, eventCount, minReplaceStart));
-                frame = new ArrayBufferWriter<byte>();
-                eventCount = 0;
-                minReplaceStart = long.MaxValue;
-            }
-
-            if (eventCount == 0)
-                firstSeq = record.FirstSeq;
-            minReplaceStart = Math.Min(minReplaceStart, record.MinReplaceStart);
-            line.CopyTo(frame.GetSpan(line.Length));
-            frame.Advance(line.Length);
-            frame.GetSpan(1)[0] = (byte)'\n';
-            frame.Advance(1);
-            eventCount += record.EventCount;
-        }
-
-        if (eventCount > 0)
-            frames.Add(Materialize(frame, firstSeq, eventCount, minReplaceStart));
-        return frames;
-
-        (byte[] Content, long FirstSeq, int EventCount, long MinReplaceStart) Materialize(
-            ArrayBufferWriter<byte> text, long seq, int count, long replaceStart)
-            => (_compression == JsonlCompression.Zstd
-                ? ZstdFrames.CompressFrame(text.WrittenSpan)
-                : text.WrittenSpan.ToArray(), seq, count, replaceStart);
-    }
+        => [.. SessionFrameWriter.Encode(events, _packChunks, WriteBatch.MaxPlaintextBytes, _compression == JsonlCompression.Zstd)
+            .Select(frame => (frame.Content, frame.FirstSeq, frame.EventCount, frame.MinReplaceStart))];
 
     /**
      * 追加一批事件。整个动作是"看末尾 → 定起点 → 写 → 更新索引"的一次事务, 临界区用**锁文件**占住,
@@ -2106,3 +2048,9 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         return handle;
     }
 }
+
+
+
+
+
+

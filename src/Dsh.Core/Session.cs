@@ -208,10 +208,13 @@ public sealed class Session
     public SurfaceFoldSnapshot? FoldSnapshot()
     {
         // 先看折叠进度再碰 Nodes: 取 Nodes 会触发"把整条日志折一遍", 那是加载路径上最贵的一步。
-        if (_surfaceManager.FoldedThrough + 1 != TotalCount)
+        // 快照记的是**已经折到哪儿**(TotalEvents), 不是日志总长: 读取方(Surface.Manager)从这一条之后接着折,
+        // 于是"只读打开、没折完"也能留下检查点, 下一次打开不必从头再来。一条都没折过就没有可写的。
+        var folded = _surfaceManager.FoldedThrough + 1;
+        if (folded <= 0)
             return null;
         return new SurfaceFoldSnapshot(
-            [.. _surfaceManager.Nodes], 0, TotalCount, _surfaceManager.ReplaceGeneration,
+            [.. _surfaceManager.Nodes], 0, folded, _surfaceManager.ReplaceGeneration,
             RequestHeader(), RequestContext());
     }
 
@@ -219,17 +222,17 @@ public sealed class Session
      * 折叠进度跨过一个读页边界之后才值得写一次检查点。
      *
      * 代价按页摊: 一页 4096 条事件, 写一次检查点约一次 fsync; 崩溃时最多重读一页。
-     * 还没折到日志末尾时返回 null —— 半截状态存下来没有意义。
+     * 折到哪儿就写到哪儿: 快照自带"折到第几条", 读回来从那里接着折。
      */
     public SurfaceFoldSnapshot? FoldSnapshotIfDue()
     {
-        if (_surfaceManager.FoldedThrough + 1 != TotalCount)
-            return null;
         var page = _surfaceManager.FoldedThrough / PageSize;
         if (page <= _checkpointPage)
             return null;
+        if (FoldSnapshot() is not { } snapshot)
+            return null;
         _checkpointPage = page;
-        return FoldSnapshot();
+        return snapshot;
     }
 
     /** 收尾时补写一次: 把最后一个不满页也盖上。 */
@@ -863,3 +866,6 @@ public sealed class Session
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }
+
+
+

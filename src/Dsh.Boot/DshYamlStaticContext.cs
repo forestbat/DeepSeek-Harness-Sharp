@@ -18,6 +18,7 @@ namespace Dsh.Boot;
 [YamlSerializable(typeof(LoggingSettings))]
 [YamlSerializable(typeof(StorageSettings))]
 [YamlSerializable(typeof(ToolResultsSettings))]
+[YamlSerializable(typeof(SessionStoreSettings))]
 [YamlSerializable(typeof(FleetSettings))]
 [YamlSerializable(typeof(MachineSettings))]
 [YamlSerializable(typeof(OutboundTunnelSettings))]

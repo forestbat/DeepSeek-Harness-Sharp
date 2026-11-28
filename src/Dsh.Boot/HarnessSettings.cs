@@ -654,6 +654,10 @@ public sealed class StorageSettings
     [YamlMember(Alias = "tool_results")]
     public ToolResultsSettings? ToolResults { get; set; }
 
+    /** 会话后端: 缺省跟现状一样是 jsonl 目录; 选了 database 就用本地库(库不存在时自动从 jsonl 导入)。 */
+    [YamlMember(Alias = "session_store")]
+    public SessionStoreSettings? SessionStore { get; set; }
+
     /** 各分区目录(相对根 / 绝对路径 / ~ 展开); 留空用同名默认目录。见 DshPaths。 */
     [YamlMember(Alias = "sessions")]
     public string? Sessions { get; set; }
@@ -675,6 +679,26 @@ public sealed class StorageSettings
 
     [YamlMember(Alias = "run")]
     public string? Run { get; set; }
+}
+
+/** 会话后端设置: 与 `storage.sessions`(目录)并列, 不改变现有键的含义。 */
+public sealed class SessionStoreSettings
+{
+    /** `jsonl`(默认) 或 `database`。 */
+    [YamlMember(Alias = "backend")]
+    public string? Backend { get; set; }
+
+    /** 库文件; 留空用 `<持久化根>/sessions.db`。 */
+    [YamlMember(Alias = "database")]
+    public string? Database { get; set; }
+
+    /** 提交道数; 留空用 min(4, CPU/2)。 */
+    [YamlMember(Alias = "lanes")]
+    public int? Lanes { get; set; }
+
+    /** `sync`(默认) 或 `io_uring`(Linux 内核 ≥5.19, 不可用时自动退回同步)。 */
+    [YamlMember(Alias = "io")]
+    public string? Io { get; set; }
 }
 
 public sealed class ToolResultsSettings
@@ -808,3 +832,4 @@ public sealed class McpServerSettings
     [YamlMember(Alias = "enabled")]
     public bool Enabled { get; set; } = true;
 }
+

@@ -4,6 +4,7 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Persistence.Database;
 
 [assembly: DshPlugin(Dsh.Persistence.Plugin.Persistence)]
 
@@ -29,13 +30,40 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         var paths = DshPaths.FromContext(ctx)
             ?? throw new InvalidOperationException("dshPaths/dshHomePath is required for the persistence plugin");
-        var persistence = new JsonlSessionPersistence(
-            paths.SessionsPath,
-            warn: message => ctx.LoggerFor("sessionPersistence").Warn(message));
+        var logger = ctx.LoggerFor("sessionPersistence");
+        var (persistence, owned) = CreatePersistence(paths, SessionStorageSettings.FromContext(ctx), logger);
         ctx.Provide(ISessionPersistence.ServiceName, persistence);
         var command = SessionCommand.Register(ctx, persistence);
         var wiring = WirePersistence(ctx, persistence);
-        return new DisposableBundle(persistence, command, wiring);
+        return new DisposableBundle(owned, command, wiring);
+    }
+
+    /** 两个后端并存: `storage.session_store.backend` 选 `database` 时换成本地库, 其余情况保持 jsonl 目录。 */
+    internal static (ISessionPersistence Persistence, IDisposable Owned) CreatePersistence(
+        DshPaths paths, SessionStorageSettings settings, Logger logger)
+    {
+        if (!settings.UsesDatabase)
+        {
+            var jsonl = new JsonlSessionPersistence(paths.SessionsPath, warn: message => logger.Warn(message));
+            return (jsonl, jsonl);
+        }
+        var databasePath = settings.ResolveDatabasePath(paths);
+        var fresh = !File.Exists(databasePath);
+        var options = new EventStoreOptions
+        {
+            Driver = string.Equals(settings.Io, "io_uring", StringComparison.OrdinalIgnoreCase)
+                ? TursoIoDriver.IoUring
+                : TursoIoDriver.Sync,
+            Lanes = settings.Lanes is { } lanes
+                ? CommitLaneOptions.Default with { LaneCount = Math.Max(1, lanes) }
+                : CommitLaneOptions.Default,
+        };
+        var persistence = new DatabaseSessionPersistence(databasePath, options, warn: message => logger.Warn(message));
+        // 第一次选 database: 把现成的 jsonl 日志原样导进来(头帧与帧字节都不重编码)。
+        if (fresh && Directory.Exists(paths.SessionsPath))
+            logger.Info($"session database: import {persistence.ImportFrom(paths.SessionsPath)} session(s) from {paths.SessionsPath}");
+        logger.Info($"session database: {databasePath} (engine {persistence.EngineVersion}, node {persistence.NodeId})");
+        return (persistence, persistence);
     }
 
     internal static IDisposable WirePersistence(Context ctx, ISessionPersistence persistence)
@@ -303,3 +331,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
         public void Dispose() => dispose();
     }
 }
+
+
+

@@ -6,7 +6,7 @@ using Dsh.Llm;
 
 namespace Dsh.Persistence;
 
-internal sealed record SessionStorageMetadata(SessionHeader Meta, long InheritedEventCount);
+public sealed record SessionStorageMetadata(SessionHeader Meta, long InheritedEventCount);
 
 internal static class SessionLogHeader
 {
@@ -161,3 +161,4 @@ internal static class SessionLogHeader
         return false;
     }
 }
+

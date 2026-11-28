@@ -91,9 +91,17 @@ public static class SessionLogFrameCodec
      * 并要求裁出来的这一段序号连续 —— 损伤不该被悄悄吞掉。
      */
     public static List<SessionEvent> Decode(byte[] sliceBytes, (int Start, int End) frame, long fromSeq, int count)
+        => DecodeFrame(sliceBytes.AsSpan(frame.Start, frame.End - frame.Start), fromSeq, count);
+
+    /**
+     * 解**一帧**(日志里连续的帧字节 / 数据库里 `frame.bytes` 那一行), 取 `[fromSeq, fromSeq + count)`。
+     *
+     * 走区间而不是数组: 数据库那边的帧字节是引擎结果缓冲(不能复制), 切片那边也不必为一帧再拷一次。
+     */
+    public static List<SessionEvent> DecodeFrame(ReadOnlySpan<byte> frame, long fromSeq, int count)
     {
-        var plain = ZstdFrames.DecompressFrame(sliceBytes, frame.Start, frame.End - frame.Start, frame.Start);
-        var decoded = DecodePlain(plain, frame.Start);
+        var plain = ZstdFrames.DecompressFrame(frame, 0);
+        var decoded = DecodePlain(plain, 0);
         var end = fromSeq + count;
         var events = new List<SessionEvent>(count);
         foreach (var sessionEvent in decoded)
@@ -102,14 +110,13 @@ public static class SessionLogFrameCodec
                 continue;
             if (events.Count > 0 && sessionEvent.Seq != events[^1].Seq + 1)
                 throw new FormatException(
-                    $"session log frame at byte {frame.Start} is not contiguous ({events[^1].Seq} -> {sessionEvent.Seq})");
+                    $"session log frame is not contiguous ({events[^1].Seq} -> {sessionEvent.Seq})");
             events.Add(sessionEvent);
         }
         if (events.Count == 0)
-            throw new FormatException($"session log frame at byte {frame.Start} holds no event in [#{fromSeq}, #{end})");
+            throw new FormatException($"session log frame holds no event in [#{fromSeq}, #{end})");
         if (events[0].Seq != fromSeq)
-            throw new FormatException(
-                $"session log frame at byte {frame.Start} starts at #{events[0].Seq}, expected #{fromSeq}");
+            throw new FormatException($"session log frame starts at #{events[0].Seq}, expected #{fromSeq}");
         return events;
     }
 
