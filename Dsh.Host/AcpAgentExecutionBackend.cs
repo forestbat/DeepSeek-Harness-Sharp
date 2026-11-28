@@ -1,3 +1,4 @@
+using System.Text;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.RemoteHost;
@@ -64,12 +65,12 @@ internal sealed class AcpAgentExecutionBackend(ExternalAgentSessions agents, Hos
     public async Task<IAgentExecutionHandle> DispatchAsync(AgentDispatchRequest request, CancellationToken cancellationToken = default)
     {
         if (request.SessionId is { } existing && agents.IsAcp(existing.Value))
-            return await DispatchExistingAsync(existing, request.AgentId, request.TargetId, request.Prompt, cancellationToken).ConfigureAwait(false);
+            return await DispatchExistingAsync(existing, request.AgentId, request.TargetId, request.Prompt, request.WaitForCompletion, cancellationToken).ConfigureAwait(false);
 
         if (request.TargetId is { } sessionTarget && sessionTarget.StartsWith(SessionTargetPrefix, StringComparison.OrdinalIgnoreCase))
         {
             var id = SessionId.Create(sessionTarget[SessionTargetPrefix.Length..]);
-            return await DispatchExistingAsync(id, request.AgentId, sessionTarget, request.Prompt, cancellationToken).ConfigureAwait(false);
+            return await DispatchExistingAsync(id, request.AgentId, sessionTarget, request.Prompt, request.WaitForCompletion, cancellationToken).ConfigureAwait(false);
         }
 
         var agentKind = ResolveAgentKind(request);
@@ -83,6 +84,8 @@ internal sealed class AcpAgentExecutionBackend(ExternalAgentSessions agents, Hos
             Command: command,
             Title: request.Name);
         var started = await agents.StartAsync(startRequest, cancellationToken).ConfigureAwait(false);
+        if (request.WaitForCompletion && !string.IsNullOrEmpty(request.Prompt))
+            await WaitTurnWithCancelAsync(agents, started.SessionId, cancellationToken).ConfigureAwait(false);
         var sessionId = SessionId.Create(started.SessionId);
         var agentId = request.AgentId ?? AgentId.FromSession(sessionId);
         return new AcpExecutionHandle(agents, sessions, agentId, sessionId, $"{TargetPrefix}{agentKind}");
@@ -111,19 +114,46 @@ internal sealed class AcpAgentExecutionBackend(ExternalAgentSessions agents, Hos
         AgentId? agentId,
         string? targetId,
         string? prompt,
+        bool waitForCompletion,
         CancellationToken cancellationToken)
     {
         var summary = sessions.Get(sessionId.Value) ?? throw new InvalidOperationException($"unknown ACP session: {sessionId.Value}");
         if (summary.Status == HostSessionStatuses.Exited)
             summary = await agents.ResumeAsync(sessionId.Value, cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(prompt))
+        {
             agents.Prompt(summary.SessionId, prompt);
+            if (waitForCompletion)
+                await WaitTurnWithCancelAsync(agents, summary.SessionId, cancellationToken).ConfigureAwait(false);
+        }
         return new AcpExecutionHandle(
             agents,
             sessions,
             agentId ?? AgentId.FromSession(sessionId),
             sessionId,
             targetId ?? $"{SessionTargetPrefix}{summary.SessionId}");
+    }
+
+    private static async Task WaitTurnWithCancelAsync(
+        ExternalAgentSessions agents,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await agents.WaitTurnAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                await agents.CancelAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+            throw;
+        }
     }
 
     private static string ResolveAgentKind(AgentDispatchRequest request)
@@ -171,11 +201,13 @@ internal sealed class AcpAgentExecutionBackend(ExternalAgentSessions agents, Hos
             if (current.Status == HostSessionStatuses.Exited)
                 await agents.ResumeAsync(sessionId.Value, cancellationToken).ConfigureAwait(false);
             agents.Prompt(sessionId.Value, message);
+            await WaitTurnWithCancelAsync(agents, sessionId.Value, cancellationToken).ConfigureAwait(false);
             return await GetStatusAsync(cancellationToken).ConfigureAwait(false);
         }
 
         public Task<AgentExecutionSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var summary = sessions.Get(sessionId.Value);
             var state = summary?.Status switch
             {
@@ -183,15 +215,85 @@ internal sealed class AcpAgentExecutionBackend(ExternalAgentSessions agents, Hos
                 HostSessionStatuses.Exited => AgentLifecycleState.Suspended,
                 _ => AgentLifecycleState.Idle,
             };
+            var completed = state != AgentLifecycleState.Active;
+            var (output, error) = ReadLatestTurnOutcome(agents.TryReadTranscriptEvents(sessionId.Value), summary, completed);
             return Task.FromResult(new AgentExecutionSnapshot(
                 AgentId,
                 SessionId,
                 AgentBackendKind.Acp,
                 TargetId,
                 state,
-                summary?.Title,
-                summary?.Status == HostSessionStatuses.Exited,
+                Summary: output ?? error,
+                Completed: completed,
+                Output: output,
+                Error: error,
                 UpdatedAt: summary?.LastActivityAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        }
+
+        private static (string? Output, string? Error) ReadLatestTurnOutcome(
+            IReadOnlyList<SessionEvent>? events,
+            RemoteSessionSummary? summary,
+            bool completed)
+        {
+            if (events is null || events.Count == 0)
+            {
+                return summary?.Status == HostSessionStatuses.Exited && summary.ExitCode is { } code && code != 0
+                    ? (null, $"ACP agent exited with code {code}")
+                    : (null, null);
+            }
+
+            var turnStartIndex = -1;
+            var latestTurn = 0;
+            for (var i = events.Count - 1; i >= 0; i--)
+            {
+                if (events[i].Data is TurnStartPayload turnStart)
+                {
+                    turnStartIndex = i;
+                    latestTurn = turnStart.Turn;
+                    break;
+                }
+            }
+            if (turnStartIndex < 0)
+            {
+                return summary?.Status == HostSessionStatuses.Exited && summary.ExitCode is { } code && code != 0
+                    ? (null, $"ACP agent exited with code {code}")
+                    : (null, null);
+            }
+
+            var text = new StringBuilder();
+            TurnEndReason? endReason = null;
+            for (var i = turnStartIndex; i < events.Count; i++)
+            {
+                switch (events[i].Data)
+                {
+                    case AssistantMessagePayload assistant when assistant.Turn == latestTurn:
+                        foreach (var block in assistant.Message.Content.OfType<TextBlock>())
+                            text.Append(block.Text);
+                        break;
+                    case TurnEndPayload turnEnd when turnEnd.Turn == latestTurn:
+                        endReason = turnEnd.Reason;
+                        break;
+                }
+            }
+
+            string? error = endReason switch
+            {
+                null when completed && summary?.Status == HostSessionStatuses.Exited =>
+                    summary.ExitCode is { } exitCode && exitCode != 0
+                        ? $"ACP agent exited with code {exitCode}"
+                        : "ACP session ended before completing turn",
+                null => null,
+                TurnEndReason.Completed or TurnEndReason.MaxTokens => null,
+                TurnEndReason.Error failure => failure.Failure.Message,
+                TurnEndReason.Blocked => "turn was blocked",
+                TurnEndReason.Interrupted or TurnEndReason.Aborted => "turn was cancelled",
+                _ => $"turn ended abnormally ({endReason.Kind})",
+            };
+
+            var output = text.Length > 0
+                ? text.ToString()
+                : endReason is TurnEndReason.Completed or TurnEndReason.MaxTokens ? "" : null;
+            return (output, error);
         }
 
         public Task CancelAsync(CancellationToken cancellationToken = default)

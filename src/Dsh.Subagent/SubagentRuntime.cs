@@ -82,7 +82,8 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
         ISubagentRun? run;
         lock (_sync)
             run = _liveRuns.GetValueOrDefault(childId);
-        if (run is RemoteSubagentRun remote && remote.ParentId == parentId)
+        var unwrapped = run is ObservedRun observed ? observed.Inner : run;
+        if (unwrapped is RemoteSubagentRun remote && remote.ParentId == parentId)
         {
             remote.Cancel();
             return true;
@@ -103,7 +104,8 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             run = _liveRuns.GetValueOrDefault(childId);
             child = run?.LocalAgent;
         }
-        if (run is RemoteSubagentRun remote && remote.ParentId == parentId && !remote.Result.IsCompleted)
+        var unwrapped = run is ObservedRun observed ? observed.Inner : run;
+        if (unwrapped is RemoteSubagentRun remote && remote.ParentId == parentId && !remote.Result.IsCompleted)
         {
             _ = remote.SendSteerAsync(PlainText(content));
             return true;
@@ -185,6 +187,19 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             return StartAsync(name, request);
 
         DelegationDepth.AssertSubagentMaxDepth(request.MaxDepth);
+        _ = DelegationDepth.ResolveChildDepth(request.Parent, request.MaxDepth);
+        if (request.ToolFilter is not null)
+        {
+            throw new SubagentException(
+                "remote subagent execution does not support toolFilter",
+                SubagentErrorCodes.UnsupportedCapability);
+        }
+        if (request.OutputSchema is not null)
+        {
+            throw new SubagentException(
+                "remote subagent execution does not support structured output (outputSchema)",
+                SubagentErrorCodes.UnsupportedCapability);
+        }
         var router = Ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName, false)
             ?? throw new SubagentException(
                 "remote subagent execution requires the agentExecutionRouter service",
@@ -447,9 +462,12 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
 
     private sealed class RemoteSubagentRun : ISubagentRun
     {
+        private const int PollIntervalMs = 50;
+
         private readonly IAgentExecutionRouter _router;
         private readonly CancellationTokenSource _ownAbort;
         private readonly CancellationTokenRegistration _parentRegistration;
+        private readonly TaskCompletionSource<IAgentExecutionHandle> _handleReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private IAgentExecutionHandle? _handle;
         private volatile bool _cancelled;
 
@@ -469,6 +487,8 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
                 {
                     _cancelled = true;
                     _ownAbort.Cancel();
+                    if (_handle is { } handle)
+                        _ = BestEffortCancelAsync(handle);
                 });
             }
             Result = DriveAsync(request, targetId, backend);
@@ -484,13 +504,19 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             _cancelled = true;
             _ownAbort.Cancel();
             if (_handle is { } handle)
-                _ = handle.CancelAsync(CancellationToken.None);
+                _ = BestEffortCancelAsync(handle);
         }
 
         public async Task SendSteerAsync(string message)
         {
-            if (_handle is { } handle)
-                _ = await handle.SendAsync(message, AgentMessageIntent.Steer, cancellationToken: _ownAbort.Token).ConfigureAwait(false);
+            try
+            {
+                var handle = await _handleReady.Task.WaitAsync(_ownAbort.Token).ConfigureAwait(false);
+                await handle.SendAsync(message, AgentMessageIntent.Steer, cancellationToken: _ownAbort.Token).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
         }
 
         private async Task<SubagentResult> DriveAsync(
@@ -506,20 +532,43 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
                     Prompt: PlainText(request.Prompt),
                     Cwd: request.Parent.Session.WorkingDirectory,
                     Name: request.Label,
-                    WaitForCompletion: true,
+                    WaitForCompletion: false,
                     Sender: new MessagePrincipal(
                         PrincipalKind.Agent,
                         request.Parent.AgentId.Value,
                         request.Parent.Id.Value),
                     AgentPreset: request.Persona);
-                _handle = await _router.DispatchAsync(dispatch, _ownAbort.Token).ConfigureAwait(false);
-                var snapshot = await _handle.GetStatusAsync(_ownAbort.Token).ConfigureAwait(false);
+                var handle = await _router.DispatchAsync(dispatch, _ownAbort.Token).ConfigureAwait(false);
+                _handle = handle;
+                _handleReady.TrySetResult(handle);
+                if (_cancelled || _ownAbort.IsCancellationRequested)
+                {
+                    await BestEffortCancelAsync(handle).ConfigureAwait(false);
+                    return AbortedResult();
+                }
+
+                AgentExecutionSnapshot snapshot;
+                while (true)
+                {
+                    _ownAbort.Token.ThrowIfCancellationRequested();
+                    snapshot = await handle.GetStatusAsync(_ownAbort.Token).ConfigureAwait(false);
+                    if (snapshot.Completed || _cancelled)
+                        break;
+                    await Task.Delay(PollIntervalMs, _ownAbort.Token).ConfigureAwait(false);
+                }
+
                 if (_cancelled)
+                {
+                    await BestEffortCancelAsync(handle).ConfigureAwait(false);
+                    return AbortedResult();
+                }
+                if (!snapshot.Completed)
                 {
                     return new SubagentResult
                     {
                         Output = [],
-                        StopReason = SubagentStopReason.Aborted,
+                        StopReason = SubagentStopReason.Error,
+                        Diagnostic = "remote agent did not complete",
                     };
                 }
                 if (snapshot.Error is { Length: > 0 } error)
@@ -531,7 +580,7 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
                         Diagnostic = error,
                     };
                 }
-                var text = snapshot.Output ?? snapshot.Summary ?? "";
+                var text = snapshot.Output ?? "";
                 return new SubagentResult
                 {
                     Output = text.Length > 0 ? [new TextBlock(text)] : [],
@@ -540,20 +589,37 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             }
             catch (OperationCanceledException) when (_cancelled || _ownAbort.IsCancellationRequested)
             {
-                return new SubagentResult
-                {
-                    Output = [],
-                    StopReason = SubagentStopReason.Aborted,
-                };
+                _handleReady.TrySetCanceled();
+                if (_handle is { } handle)
+                    await BestEffortCancelAsync(handle).ConfigureAwait(false);
+                return AbortedResult();
             }
             catch (Exception error)
             {
+                _handleReady.TrySetCanceled();
                 return new SubagentResult
                 {
                     Output = [],
                     StopReason = SubagentStopReason.Error,
                     Diagnostic = error.Message,
                 };
+            }
+        }
+
+        private static SubagentResult AbortedResult() => new()
+        {
+            Output = [],
+            StopReason = SubagentStopReason.Aborted,
+        };
+
+        private static async Task BestEffortCancelAsync(IAgentExecutionHandle handle)
+        {
+            try
+            {
+                await handle.CancelAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
             }
         }
 
@@ -570,6 +636,8 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
 
     private sealed class ObservedRun(ISubagentRun inner, SubagentRuntime owner) : ISubagentRun
     {
+        internal ISubagentRun Inner => inner;
+
         public SessionId Id => inner.Id;
 
         public IAgent? LocalAgent => inner.LocalAgent;

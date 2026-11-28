@@ -29,12 +29,21 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
         public SemaphoreSlim Gate { get; } = new(1, 1);
     }
 
+    private sealed class TaskExecution
+    {
+        public CancellationTokenSource Cts { get; } = new();
+        public IAgent? Agent { get; set; }
+        public MessageId? QueuedMessageId { get; set; }
+        public int? ClaimedTurn { get; set; }
+        public bool OwnsActiveTurn { get; set; }
+    }
+
     private readonly Context _ctx = ctx;
     private readonly string? _provider = provider;
     private readonly string? _model = model;
     private readonly Dictionary<string, SessionRecord> _sessions = [];
-    /** task id -> 正在执行的任务所属会话: 取消请求只带 task id。 */
-    private readonly Dictionary<string, SessionRecord> _byTask = [];
+    /** task id -> 任务执行隔离状态: 取消只停本任务, 等待与结果采集只认本任务认领的 turn。 */
+    private readonly Dictionary<string, TaskExecution> _byTask = [];
     private readonly Lock _gate = new();
 
     public async Task ExecuteAsync(RequestContext context, AgentEventQueue eventQueue, CancellationToken cancellationToken)
@@ -47,46 +56,79 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
                 throw new A2AException("message has no text parts", A2AErrorCode.ContentTypeNotSupported);
 
             var record = await ResolveSessionAsync(context, cancellationToken).ConfigureAwait(false);
+            var taskState = new TaskExecution();
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, taskState.Cts.Token);
+            var linkedToken = linkedCts.Token;
             lock (_gate)
-                _byTask[context.TaskId] = record;
-            await updater.SubmitAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-            await updater.StartWorkAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-            await record.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                _byTask[context.TaskId] = taskState;
             try
             {
-                var (agent, startSeq, rejectedReason) = await InjectMessageAsync(record, context, text, cancellationToken)
-                    .ConfigureAwait(false);
-                if (rejectedReason is not null)
+                await updater.SubmitAsync(cancellationToken: linkedToken).ConfigureAwait(false);
+                await updater.StartWorkAsync(cancellationToken: linkedToken).ConfigureAwait(false);
+                await record.Gate.WaitAsync(linkedToken).ConfigureAwait(false);
+                try
                 {
-                    await updater.FailAsync(AgentMessage(rejectedReason), cancellationToken: cancellationToken).ConfigureAwait(false);
-                    return;
-                }
+                    var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+                    var preLive = ResolveLiveAgent(record, agents);
+                    if (preLive is not null)
+                        await preLive.WhenIdle().WaitAsync(linkedToken).ConfigureAwait(false);
+                    long? startSeq = preLive?.Session.Seq;
 
-                await agent!.WhenIdle().ConfigureAwait(false);
-                var effectiveStartSeq = startSeq ?? ResolveInjectedStartSeq(agent.Session, context.TaskId);
-                var outcome = CollectOutcome(agent, effectiveStartSeq);
-                if (outcome.Canceled)
-                {
-                    await updater.CancelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-                    return;
+                    var (agent, effectiveStartSeq, queuedMessageId, rejectedReason) = await InjectMessageAsync(
+                        record, context, text, preLive, startSeq, linkedToken).ConfigureAwait(false);
+                    if (rejectedReason is not null)
+                    {
+                        await updater.FailAsync(AgentMessage(rejectedReason), cancellationToken: linkedToken).ConfigureAwait(false);
+                        return;
+                    }
+
+                    lock (_gate)
+                    {
+                        taskState.Agent = agent;
+                        taskState.QueuedMessageId = queuedMessageId;
+                    }
+
+                    if (linkedToken.IsCancellationRequested)
+                    {
+                        RemovePendingMessageIfUnclaimed(taskState);
+                        throw new OperationCanceledException(linkedToken);
+                    }
+
+                    var claimedTurn = await TrackAndWaitTurnAsync(
+                        agent!, taskState, effectiveStartSeq, queuedMessageId, linkedToken).ConfigureAwait(false);
+                    var outcome = CollectOutcome(agent!, effectiveStartSeq, claimedTurn);
+                    if (outcome.Canceled)
+                    {
+                        await updater.CancelAsync(cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                        return;
+                    }
+                    if (outcome.Error is { } error)
+                    {
+                        await updater.FailAsync(AgentMessage(error), cancellationToken: linkedToken).ConfigureAwait(false);
+                        return;
+                    }
+                    await updater.CompleteAsync(
+                        outcome.Text is { Length: > 0 } final ? AgentMessage(final) : null,
+                        cancellationToken: linkedToken).ConfigureAwait(false);
                 }
-                if (outcome.Error is { } error)
+                finally
                 {
-                    await updater.FailAsync(AgentMessage(error), cancellationToken: cancellationToken).ConfigureAwait(false);
-                    return;
+                    record.Gate.Release();
                 }
-                await updater.CompleteAsync(
-                    outcome.Text is { Length: > 0 } final ? AgentMessage(final) : null,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                RemovePendingMessageIfUnclaimed(taskState);
+                throw;
             }
             finally
             {
                 lock (_gate)
                 {
-                    if (_byTask.TryGetValue(context.TaskId, out var current) && ReferenceEquals(current, record))
+                    if (_byTask.TryGetValue(context.TaskId, out var current) && ReferenceEquals(current, taskState))
                         _byTask.Remove(context.TaskId);
                 }
-                record.Gate.Release();
+                taskState.Cts.Dispose();
             }
         }
         catch (OperationCanceledException)
@@ -105,17 +147,42 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
     }
 
     /**
-     * 让这个任务正在跑的 agent 停手。返回是否找到并取消了它。
+     * 让这个任务停手: 始终取消任务自身令牌; 仅当本任务已认领活动回合时才中断共享 agent, 否则只摘除尚未消费的排队消息。
      * 必须在 A2A SDK 的取消路径之前调用, 以免与事件通知器互相等待锁。
      */
     public bool CancelAgentForTask(string taskId)
     {
-        SessionRecord? record;
+        TaskExecution? taskState;
+        IAgent? agent;
+        MessageId? queuedId;
+        bool ownsActiveTurn;
         lock (_gate)
-            _byTask.TryGetValue(taskId, out record);
-        if (record?.Agent is null)
-            return false;
-        record.Agent.Cancel(new AgentCancelCause.User());
+        {
+            if (!_byTask.TryGetValue(taskId, out taskState))
+                return false;
+            taskState.Cts.Cancel();
+            agent = taskState.Agent;
+            queuedId = taskState.QueuedMessageId;
+            ownsActiveTurn = taskState.OwnsActiveTurn;
+        }
+        if (agent is null)
+            return true;
+        if (ownsActiveTurn)
+        {
+            agent.Cancel(new AgentCancelCause.User(), keepInbox: true);
+            return true;
+        }
+        if (queuedId is { } id && agent is AgentLoopAgent loop)
+        {
+            if (!loop.Inbox.Remove(id))
+            {
+                bool becameOwner;
+                lock (_gate)
+                    becameOwner = taskState.OwnsActiveTurn;
+                if (becameOwner)
+                    agent.Cancel(new AgentCancelCause.User(), keepInbox: true);
+            }
+        }
         return true;
     }
 
@@ -242,18 +309,20 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
         };
     }
 
-    private async Task<(IAgent? Agent, long? StartSeq, string? RejectedReason)> InjectMessageAsync(
+    private async Task<(IAgent? Agent, long StartSeq, MessageId? QueuedMessageId, string? RejectedReason)> InjectMessageAsync(
         SessionRecord record,
         RequestContext context,
         string text,
+        IAgent? preLive,
+        long? startSeq,
         CancellationToken cancellationToken)
     {
         var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
         var persistent = _ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName, false);
         var bus = _ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
 
-        var liveAgent = ResolveLiveAgent(record, agents);
-        long? startSeq = liveAgent?.Session.Seq;
+        var liveAgent = preLive ?? ResolveLiveAgent(record, agents);
+        startSeq ??= liveAgent?.Session.Seq;
 
         var sender = new MessagePrincipal(
             PrincipalKind.Agent,
@@ -277,7 +346,7 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
                 WakeIfSuspended: true);
             var delivery = await bus.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
             if (delivery.Status == AgentDeliveryStatus.Rejected)
-                return (null, null, delivery.Reason ?? "inbound A2A message was rejected");
+                return (null, 0, null, delivery.Reason ?? "inbound A2A message was rejected");
 
             liveAgent ??= (delivery.DeliveredSessionId is { } deliveredId ? agents?.Get(deliveredId) : null)
                 ?? ResolveLiveAgent(record, agents);
@@ -287,11 +356,13 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
                 _ = await bus.FlushOfflineAsync(record.AgentId, cancellationToken).ConfigureAwait(false);
             }
             if (liveAgent is null)
-                return (null, null, $"target agent \"{record.AgentId}\" could not be woken");
+                return (null, 0, null, $"target agent \"{record.AgentId}\" could not be woken");
 
             record.Agent = liveAgent;
             record.TargetSessionId = liveAgent.Id;
-            return (liveAgent, startSeq, null);
+            var effectiveStartSeq = startSeq ?? ResolveInjectedStartSeq(liveAgent.Session, context.TaskId);
+            var queuedMessageId = ResolveQueuedMessageId(liveAgent.Session, effectiveStartSeq, context.TaskId);
+            return (liveAgent, effectiveStartSeq, queuedMessageId, null);
         }
 
         if (liveAgent is null && persistent is not null)
@@ -300,7 +371,7 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
             startSeq = liveAgent.Session.Seq;
         }
         if (liveAgent is null)
-            return (null, null, $"target agent \"{record.AgentId}\" is not live");
+            return (null, 0, null, $"target agent \"{record.AgentId}\" is not live");
 
         record.Agent = liveAgent;
         record.TargetSessionId = liveAgent.Id;
@@ -313,8 +384,151 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
         var userMessage = MessageFactory.CreateUserText(text);
         if (liveAgent is AgentLoopAgent loopAgent)
             loopAgent.SetMessageAttribution(userMessage.Id, attribution);
+        var seqBeforeSend = startSeq ?? liveAgent.Session.Seq;
         liveAgent.Followup(userMessage);
-        return (liveAgent, startSeq, null);
+        return (liveAgent, seqBeforeSend, userMessage.Id, null);
+    }
+
+    private void RemovePendingMessageIfUnclaimed(TaskExecution taskState)
+    {
+        IAgent? agent;
+        MessageId? queuedId;
+        bool ownsActiveTurn;
+        lock (_gate)
+        {
+            agent = taskState.Agent;
+            queuedId = taskState.QueuedMessageId;
+            ownsActiveTurn = taskState.OwnsActiveTurn;
+        }
+        if (!ownsActiveTurn && queuedId is { } id && agent is AgentLoopAgent loop)
+            loop.Inbox.Remove(id);
+    }
+
+    private async Task<int> TrackAndWaitTurnAsync(
+        IAgent agent,
+        TaskExecution taskState,
+        long startSeq,
+        MessageId? queuedMessageId,
+        CancellationToken cancellationToken)
+    {
+        var turnDone = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stateLock = new Lock();
+        int? activeTurn = null;
+        int? claimedTurn = null;
+        var ended = false;
+        var lastScannedSeq = startSeq - 1;
+
+        void ClaimTurn(int turn)
+        {
+            if (ended)
+                return;
+            claimedTurn ??= turn;
+            lock (_gate)
+            {
+                taskState.ClaimedTurn = claimedTurn;
+                taskState.OwnsActiveTurn = true;
+            }
+        }
+
+        void ProcessEvent(SessionEvent sessionEvent)
+        {
+            switch (sessionEvent.Data)
+            {
+                case TurnStartPayload turnStart:
+                    activeTurn = turnStart.Turn;
+                    if (queuedMessageId is null && claimedTurn is null)
+                        ClaimTurn(turnStart.Turn);
+                    break;
+                case UserMessagePayload userMessage when queuedMessageId is { } qid && userMessage.Message.Id == qid:
+                    if (activeTurn is { } turn)
+                        ClaimTurn(turn);
+                    break;
+                case TurnEndPayload turnEnd:
+                    if (claimedTurn == turnEnd.Turn)
+                    {
+                        ended = true;
+                        lock (_gate)
+                            taskState.OwnsActiveTurn = false;
+                        turnDone.TrySetResult(turnEnd.Turn);
+                    }
+                    if (activeTurn == turnEnd.Turn)
+                        activeTurn = null;
+                    break;
+            }
+        }
+
+        void OnSessionAppended(Session _, SessionEvent sessionEvent)
+        {
+            lock (stateLock)
+            {
+                if (sessionEvent.Seq <= lastScannedSeq)
+                    return;
+                lastScannedSeq = sessionEvent.Seq;
+                ProcessEvent(sessionEvent);
+            }
+        }
+
+        var offClaimed = agent.Ctx.On<AgentInboxClaimedNotification>(notification =>
+        {
+            if (!ReferenceEquals(notification.Agent, agent) || queuedMessageId is not { } qid || notification.Message.Id != qid)
+                return;
+            lock (stateLock)
+                ClaimTurn(notification.Turn);
+        });
+        agent.Session.Appended += OnSessionAppended;
+        try
+        {
+            lock (stateLock)
+            {
+                foreach (var sessionEvent in agent.Session.SnapshotEvents(startSeq))
+                {
+                    if (sessionEvent.Seq <= lastScannedSeq)
+                        continue;
+                    lastScannedSeq = sessionEvent.Seq;
+                    ProcessEvent(sessionEvent);
+                }
+                if (!ended && claimedTurn is null && activeTurn is { } runningTurn
+                    && queuedMessageId is { } qid && agent is AgentLoopAgent loop
+                    && !IsMessagePendingInInbox(loop.Inbox, qid)
+                    && !cancellationToken.IsCancellationRequested)
+                {
+                    ClaimTurn(runningTurn);
+                }
+            }
+            return await turnDone.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            agent.Session.Appended -= OnSessionAppended;
+            offClaimed();
+        }
+    }
+
+    private static bool IsMessagePendingInInbox(Inbox inbox, MessageId messageId)
+        => inbox.NextTurn.Any(message => message.Id == messageId)
+            || inbox.NextStep.Any(message => message.Id == messageId);
+
+    private static MessageId? ResolveQueuedMessageId(Session session, long startSeq, string taskId)
+    {
+        var envelopeId = $"a2a-{taskId}";
+        var events = session.SnapshotEvents(startSeq);
+        var seenEnvelope = false;
+        foreach (var sessionEvent in events)
+        {
+            if (sessionEvent.Data is AgentEnvelopePayload payload && payload.Envelope.EnvelopeId == envelopeId)
+            {
+                seenEnvelope = true;
+                continue;
+            }
+            if (seenEnvelope && sessionEvent.Data is InboxSplicePayload { Inserted.Count: > 0 } splice)
+                return splice.Inserted[0].Id;
+        }
+        foreach (var sessionEvent in events)
+        {
+            if (sessionEvent.Data is InboxSplicePayload { Inserted.Count: > 0 } splice)
+                return splice.Inserted[0].Id;
+        }
+        return null;
     }
 
     private static IAgent? ResolveLiveAgent(SessionRecord record, AgentRegistry? agents)
@@ -349,7 +563,7 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
     private string Cwd()
         => (_ctx.GetProp("harnessOptions") as HarnessOptions)?.Cwd ?? Directory.GetCurrentDirectory();
 
-    private static (string? Text, string? Error, bool Canceled) CollectOutcome(IAgent agent, long startSeq)
+    private static (string? Text, string? Error, bool Canceled) CollectOutcome(IAgent agent, long startSeq, int claimedTurn)
     {
         var events = agent.Session.SnapshotEvents(startSeq);
         TurnEndReason? reason = null;
@@ -358,10 +572,10 @@ public sealed class DshAgentHandler(Context ctx, string? provider = null, string
         {
             switch (sessionEvent.Data)
             {
-                case TurnEndPayload turnEnd:
+                case TurnEndPayload turnEnd when turnEnd.Turn == claimedTurn:
                     reason = turnEnd.Reason;
                     break;
-                case AssistantMessagePayload assistant:
+                case AssistantMessagePayload assistant when assistant.Turn == claimedTurn:
                     foreach (var block in assistant.Message.Content.OfType<TextBlock>())
                         text.Append(block.Text);
                     break;

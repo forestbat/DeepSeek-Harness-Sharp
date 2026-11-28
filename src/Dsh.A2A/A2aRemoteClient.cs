@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using A2A;
@@ -141,8 +144,38 @@ public sealed class A2aRemoteClient(
             _cardCache.Clear();
             return;
         }
-        var (baseUri, _) = Resolve(target);
-        _cardCache.TryRemove(baseUri.AbsoluteUri, out _);
+        var (baseUri, headers) = Resolve(target);
+        _cardCache.TryRemove(BuildCardCacheKey(baseUri, headers), out _);
+    }
+
+    internal static string? SanitizeEndpoint(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+        {
+            var builder = new UriBuilder(uri)
+            {
+                UserName = "",
+                Password = "",
+                Query = "",
+                Fragment = "",
+            };
+            return builder.Uri.GetLeftPart(UriPartial.Path);
+        }
+        var cut = raw.IndexOfAny(['?', '#']);
+        var stripped = cut >= 0 ? raw[..cut] : raw;
+        var schemeEnd = stripped.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd >= 0)
+        {
+            var authorityStart = schemeEnd + 3;
+            var pathStart = stripped.IndexOf('/', authorityStart);
+            var authorityEnd = pathStart >= 0 ? pathStart : stripped.Length;
+            var at = stripped.IndexOf('@', authorityStart, authorityEnd - authorityStart);
+            if (at >= 0)
+                stripped = string.Concat(stripped.AsSpan(0, authorityStart), stripped.AsSpan(at + 1));
+        }
+        return stripped;
     }
 
     private async Task<(AgentCard Card, A2AClient Client, HttpClient Http)> ConnectAsync(string target, CancellationToken cancellationToken)
@@ -166,7 +199,7 @@ public sealed class A2aRemoteClient(
         IReadOnlyDictionary<string, string> headers,
         CancellationToken cancellationToken)
     {
-        var cacheKey = baseUri.AbsoluteUri;
+        var cacheKey = BuildCardCacheKey(baseUri, headers);
         var now = _clock.GetUtcNow();
         if (_cardCacheTtl > TimeSpan.Zero
             && _cardCache.TryGetValue(cacheKey, out var cached)
@@ -181,6 +214,31 @@ public sealed class A2aRemoteClient(
         if (_cardCacheTtl > TimeSpan.Zero)
             _cardCache[cacheKey] = new CachedCard(card, _clock.GetUtcNow().Add(_cardCacheTtl));
         return card;
+    }
+
+    private static string BuildCardCacheKey(Uri baseUri, IReadOnlyDictionary<string, string> headers)
+    {
+        var sorted = headers
+            .Select(pair => (Name: pair.Key.ToLowerInvariant(), pair.Value))
+            .OrderBy(pair => pair.Name, StringComparer.Ordinal)
+            .ThenBy(pair => pair.Value, StringComparer.Ordinal);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> lengthPrefix = stackalloc byte[sizeof(int)];
+        foreach (var (name, value) in sorted)
+        {
+            AppendLengthPrefixedUtf8(hash, lengthPrefix, name);
+            AppendLengthPrefixedUtf8(hash, lengthPrefix, value);
+        }
+        var digest = Convert.ToHexString(hash.GetHashAndReset());
+        return $"{baseUri.AbsoluteUri}|{digest}";
+    }
+
+    private static void AppendLengthPrefixedUtf8(IncrementalHash hash, Span<byte> lengthBuffer, string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        BinaryPrimitives.WriteInt32LittleEndian(lengthBuffer, bytes.Length);
+        hash.AppendData(lengthBuffer);
+        hash.AppendData(bytes);
     }
 
     private static void Apply(HttpClient http, IReadOnlyDictionary<string, string> headers)
