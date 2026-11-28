@@ -26,11 +26,13 @@ public sealed class JsonOfflineMailboxStore : Service, IOfflineMailboxStore
         ArgumentNullException.ThrowIfNull(envelope);
         lock (_gate)
         {
-            var queue = GetOrLoadLocked(envelope.TargetAgentId);
+            var path = PathFor(envelope.TargetAgentId);
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(path);
+            var queue = ReloadLocked(envelope.TargetAgentId, path);
             if (IsDuplicate(queue, envelope))
                 return false;
             queue.Add(envelope);
-            PersistLocked(envelope.TargetAgentId, queue);
+            PersistLocked(path, queue);
             return true;
         }
     }
@@ -38,19 +40,25 @@ public sealed class JsonOfflineMailboxStore : Service, IOfflineMailboxStore
     public IReadOnlyList<AgentEnvelope> Peek(AgentId agentId)
     {
         lock (_gate)
-            return [.. GetOrLoadLocked(agentId)];
+        {
+            var path = PathFor(agentId);
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(path);
+            return [.. ReloadLocked(agentId, path)];
+        }
     }
 
     public IReadOnlyList<AgentEnvelope> Drain(AgentId agentId)
     {
         lock (_gate)
         {
-            var queue = GetOrLoadLocked(agentId);
+            var path = PathFor(agentId);
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(path);
+            var queue = ReloadLocked(agentId, path);
             if (queue.Count == 0)
                 return [];
             List<AgentEnvelope> drained = [.. queue];
             queue.Clear();
-            PersistLocked(agentId, queue);
+            PersistLocked(path, queue);
             return drained;
         }
     }
@@ -60,27 +68,26 @@ public sealed class JsonOfflineMailboxStore : Service, IOfflineMailboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(envelopeId);
         lock (_gate)
         {
-            var queue = GetOrLoadLocked(agentId);
+            var path = PathFor(agentId);
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(path);
+            var queue = ReloadLocked(agentId, path);
             var removed = queue.RemoveAll(item => string.Equals(item.EnvelopeId, envelopeId, StringComparison.Ordinal));
             if (removed == 0)
                 return false;
-            PersistLocked(agentId, queue);
+            PersistLocked(path, queue);
             return true;
         }
     }
 
-    private List<AgentEnvelope> GetOrLoadLocked(AgentId agentId)
+    private List<AgentEnvelope> ReloadLocked(AgentId agentId, string path)
     {
-        if (_mailboxes.TryGetValue(agentId, out var existing))
-            return existing;
-        var loaded = OwnerOnlyAtomicFile.ReadJson(PathFor(agentId), DshPersistenceJsonContext.Default.ListAgentEnvelope) ?? [];
+        var loaded = OwnerOnlyAtomicFile.ReadJson(path, DshPersistenceJsonContext.Default.ListAgentEnvelope) ?? [];
         _mailboxes[agentId] = loaded;
         return loaded;
     }
 
-    private void PersistLocked(AgentId agentId, List<AgentEnvelope> queue)
+    private static void PersistLocked(string path, List<AgentEnvelope> queue)
     {
-        var path = PathFor(agentId);
         if (queue.Count == 0)
         {
             OwnerOnlyAtomicFile.TryDelete(path);

@@ -25,13 +25,19 @@ public sealed class JsonAgentProfileStore : Service, IAgentDirectoryStore
     public AgentProfile? Get(AgentId id)
     {
         lock (_gate)
+        {
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(_profilesPath);
+            ReloadLocked();
             return _profiles.GetValueOrDefault(id);
+        }
     }
 
     public IReadOnlyList<AgentProfile> List()
     {
         lock (_gate)
         {
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(_profilesPath);
+            ReloadLocked();
             return
             [
                 .. _profiles.Values
@@ -46,6 +52,8 @@ public sealed class JsonAgentProfileStore : Service, IAgentDirectoryStore
         ArgumentNullException.ThrowIfNull(profile);
         lock (_gate)
         {
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(_profilesPath);
+            ReloadLocked();
             _profiles[profile.AgentId] = profile;
             PersistLocked();
         }
@@ -55,6 +63,8 @@ public sealed class JsonAgentProfileStore : Service, IAgentDirectoryStore
     {
         lock (_gate)
         {
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(_profilesPath);
+            ReloadLocked();
             if (!_profiles.Remove(id))
                 return false;
             PersistLocked();
@@ -64,15 +74,23 @@ public sealed class JsonAgentProfileStore : Service, IAgentDirectoryStore
 
     private void Load()
     {
-        var loaded = OwnerOnlyAtomicFile.ReadJson(_profilesPath, DshPersistenceJsonContext.Default.ListAgentProfile);
-        if (loaded is null)
+        if (!File.Exists(_profilesPath))
             return;
         lock (_gate)
         {
-            _profiles.Clear();
-            foreach (var profile in loaded)
-                _profiles[profile.AgentId] = profile;
+            using var fileLock = OwnerOnlyAtomicFile.AcquireLock(_profilesPath);
+            ReloadLocked();
         }
+    }
+
+    private void ReloadLocked()
+    {
+        var loaded = OwnerOnlyAtomicFile.ReadJson(_profilesPath, DshPersistenceJsonContext.Default.ListAgentProfile);
+        _profiles.Clear();
+        if (loaded is null)
+            return;
+        foreach (var profile in loaded)
+            _profiles[profile.AgentId] = profile;
     }
 
     private void PersistLocked()

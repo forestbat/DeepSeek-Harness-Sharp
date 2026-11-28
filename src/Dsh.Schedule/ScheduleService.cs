@@ -217,7 +217,7 @@ public sealed class ScheduleService : Service, IDisposable
                 return;
             var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
             var next = WakeIndex.List()
-                .FirstOrDefault(entry => agents?.Get(entry.SessionId) is null && agents?.GetByAgent(entry.AgentId) is null);
+                .FirstOrDefault(entry => agents?.Get(entry.SessionId) is null);
             if (next is null)
             {
                 _indexTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
@@ -249,19 +249,26 @@ public sealed class ScheduleService : Service, IDisposable
                 if (_disposed)
                     return;
                 var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
-                if (agents?.Get(entry.SessionId) is not null || agents?.GetByAgent(entry.AgentId) is not null)
+                if (agents?.Get(entry.SessionId) is not null)
                     continue;
 
                 IAgent? woken = null;
                 try
                 {
                     var manager = Ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName, false);
+                    var persistence = Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
                     if (manager?.Get(entry.AgentId) is { State: not AgentLifecycleState.Disposed })
                     {
-                        woken = await manager.WakeAsync(entry.AgentId).ConfigureAwait(false);
+                        if (persistence is null || persistence.Stat(entry.SessionId) is not null)
+                            woken = await manager.WakeSessionAsync(entry.AgentId, entry.SessionId).ConfigureAwait(false);
+                        else
+                            WakeIndex.Remove(entry.AgentId, entry.SessionId);
                     }
-                    else if (agents is not null
-                        && Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false)?.Stat(entry.SessionId) is not null)
+                    else if (manager?.Get(entry.AgentId) is { State: AgentLifecycleState.Disposed })
+                    {
+                        WakeIndex.Remove(entry.AgentId, entry.SessionId);
+                    }
+                    else if (agents is not null && persistence?.Stat(entry.SessionId) is not null)
                     {
                         var resumed = await agents.Resume(new ResumeAgentOptions(entry.SessionId, AgentId: entry.AgentId))
                             .ConfigureAwait(false);
@@ -278,7 +285,7 @@ public sealed class ScheduleService : Service, IDisposable
                         $"failed to wake agent \"{entry.AgentId}\" for scheduled reminder: {error.Message}");
                 }
 
-                if (woken is not null)
+                if (woken is not null && woken.Id == entry.SessionId)
                     Fire(woken.Session);
             }
         }

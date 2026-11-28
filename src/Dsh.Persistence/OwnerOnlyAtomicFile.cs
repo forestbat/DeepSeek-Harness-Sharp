@@ -7,6 +7,8 @@ internal static class OwnerOnlyAtomicFile
 {
     private const UnixFileMode OwnerDirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     private const UnixFileMode OwnerFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    private static readonly TimeSpan LockRetryDelay = TimeSpan.FromMilliseconds(5);
+    private const int LockAttempts = 400;
 
     public static void EnsureDirectory(string directory)
     {
@@ -17,6 +19,34 @@ internal static class OwnerOnlyAtomicFile
         }
         Directory.CreateDirectory(directory, OwnerDirectoryMode);
         File.SetUnixFileMode(directory, OwnerDirectoryMode);
+    }
+
+    public static FileStream AcquireLock(string path)
+    {
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException($"invalid target path \"{path}\"");
+        EnsureDirectory(directory);
+        var lockPath = path + ".lock";
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.OpenOrCreate,
+            Access = FileAccess.ReadWrite,
+            Share = FileShare.None,
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = OwnerFileMode;
+        for (var attempt = 0; attempt < LockAttempts; attempt++)
+        {
+            try
+            {
+                return new FileStream(lockPath, options);
+            }
+            catch (IOException) when (attempt + 1 < LockAttempts)
+            {
+                Thread.Sleep(LockRetryDelay);
+            }
+        }
+        throw new IOException($"timed out acquiring file lock \"{lockPath}\"");
     }
 
     public static void WriteJson<T>(string path, T value, JsonTypeInfo<T> typeInfo)

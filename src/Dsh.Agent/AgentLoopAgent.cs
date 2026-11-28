@@ -142,6 +142,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         {
             if (_attributions.TryGetValue(candidate.Id, out var local))
                 return local;
+            if (Inbox.PeekAttribution(candidate.Id) is { } inboxAttr)
+                return inboxAttr;
             if (bus?.PeekAttribution(candidate.Id) is { } busAttr)
                 return busAttr;
         }
@@ -154,9 +156,11 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         MessageAttribution? selected = null;
         foreach (var message in messages)
         {
+            var inboxAttr = Inbox.TakeAttribution(message.Id);
+            var busAttr = bus?.TakeAttribution(message.Id);
             var found = _attributions.TryRemove(message.Id, out var local)
                 ? local
-                : bus?.TakeAttribution(message.Id);
+                : inboxAttr ?? busAttr;
             if (found is null)
                 continue;
             if (selected is null || found.TrustLevel >= selected.TrustLevel)
@@ -201,7 +205,14 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             && _phase is not Phase.Idle
             && PhaseAbort(_phase)?.IsCancellationRequested == true;
         var resolvedTarget = wakingAfterAbort ? InboxTargets.NextTurn : target;
-        Inbox.Splice(resolvedTarget, int.MaxValue, 0, [message]);
+        var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false) as AgentMessageBus;
+        var attribution = _attributions.TryGetValue(message.Id, out var local)
+            ? local
+            : bus?.PeekAttribution(message.Id);
+        IReadOnlyDictionary<MessageId, MessageAttribution>? attributions = attribution is not null
+            ? new Dictionary<MessageId, MessageAttribution> { [message.Id] = attribution }
+            : null;
+        Inbox.Splice(resolvedTarget, int.MaxValue, 0, [message], attributions);
         if (wakeup)
             WakeDriver(wakingAfterAbort);
     }
@@ -932,7 +943,7 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
                     : await tools.FinishScheduledExecution(slot.Value.Exec, slot.Value.Result);
                 AppendToolResult(turn, step, group[committed], result, callSeqs[committed]!.Value);
                 foreach (var context in result.AdditionalContexts ?? [])
-                    Inbox.Splice(InboxTargets.NextStep, Inbox.NextStep.Count, 0, [context]);
+                    Inbox.Splice(InboxTargets.NextStep, int.MaxValue, 0, [context]);
                 concluded = concluded || result is ToolExecutionResult.Success { ConcludesTurn: true };
                 committed++;
             }

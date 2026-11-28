@@ -213,7 +213,8 @@ public sealed record InboxSplicePayload(
     long Start,
     long? RemovedCount,
     IReadOnlyList<UserMessage> Inserted,
-    string? Outcome = null) : SessionEventPayload
+    string? Outcome = null,
+    IReadOnlyDictionary<string, MessageAttribution>? Attributions = null) : SessionEventPayload
 {
     public override string Type => SessionEventTypes.AgentInboxSpliced;
 }

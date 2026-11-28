@@ -140,8 +140,66 @@ public sealed class PersistentAgentManager : Service, IPersistentAgentManager, I
         }
     }
 
+    public async Task<IAgent> WakeSessionAsync(AgentId id, SessionId sessionId, CancellationToken cancellationToken = default)
+    {
+        var gate = LockFor(id);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var profile = Get(id)
+                ?? throw new InvalidOperationException($"agent profile \"{id}\" not found");
+            if (profile.State == AgentLifecycleState.Disposed)
+                throw new InvalidOperationException($"agent profile \"{id}\" is disposed");
+
+            var agents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false)
+                ?? throw new InvalidOperationException("persistent agent manager requires the agents service");
+            var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
+
+            if (agents.Get(sessionId) is { } live)
+            {
+                UpdateProfileOnWake(profile, live, preserveExistingActive: true, agents);
+                if (bus is not null)
+                    await bus.FlushOfflineAsync(id, cancellationToken).ConfigureAwait(false);
+                return live;
+            }
+
+            var persistence = Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
+            if (persistence?.Stat(sessionId) is null)
+                throw new InvalidOperationException($"session \"{sessionId}\" for agent \"{id}\" is not persisted");
+
+            var resolvedOptions = ResolveAgentOptions(profile.Options);
+            var resumed = await agents.Resume(
+                new ResumeAgentOptions(sessionId, resolvedOptions, AgentId: profile.AgentId),
+                cancellationToken).ConfigureAwait(false);
+            var woken = resumed.Agent;
+            var updated = UpdateProfileOnWake(profile, woken, preserveExistingActive: true, agents);
+            if (bus is not null)
+            {
+                await bus.FlushOfflineAsync(id, cancellationToken).ConfigureAwait(false);
+                await bus.PublishEventAsync(
+                    new AgentRuntimeEvent(
+                        $"evt-{Guid.NewGuid():N}",
+                        id,
+                        woken.Id,
+                        AgentRuntimeEventKind.AgentWoken,
+                        $"Agent '{updated.Name}' woken",
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            return woken;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task SuspendAsync(AgentId id, CancellationToken cancellationToken = default)
     {
+        var currentAgents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+        if (currentAgents?.CurrentInitiator() is { } initiator && initiator.AgentId == id)
+            throw new InvalidOperationException($"agent \"{id}\" cannot suspend itself from within its own running turn");
+
         var gate = LockFor(id);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -233,6 +291,10 @@ public sealed class PersistentAgentManager : Service, IPersistentAgentManager, I
 
     public async Task<bool> DeleteAsync(AgentId id, CancellationToken cancellationToken = default)
     {
+        var currentAgents = Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+        if (currentAgents?.CurrentInitiator() is { } initiator && initiator.AgentId == id)
+            throw new InvalidOperationException($"agent \"{id}\" cannot delete itself from within its own running turn");
+
         var gate = LockFor(id);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -328,16 +390,26 @@ public sealed class PersistentAgentManager : Service, IPersistentAgentManager, I
         return new AgentOptions(provider, model, configured?.ReasoningEffort, configured?.MaxTokens);
     }
 
-    private AgentProfile UpdateProfileOnWake(AgentProfile profile, IAgent agent)
+    private AgentProfile UpdateProfileOnWake(
+        AgentProfile profile,
+        IAgent agent,
+        bool preserveExistingActive = false,
+        AgentRegistry? agents = null)
     {
         List<SessionId> sessions = [.. profile.SessionIds];
         if (!sessions.Contains(agent.Id))
             sessions.Add(agent.Id);
+        var activeSessionId = preserveExistingActive
+            ? profile.ActiveSessionId ?? agent.Id
+            : agent.Id;
+        var isRunning = agents is not null
+            ? agents.ListByAgent(profile.AgentId).Any(live => live.Status == AgentStatus.Running)
+            : agent.Status == AgentStatus.Running;
         var updated = profile with
         {
-            ActiveSessionId = agent.Id,
+            ActiveSessionId = activeSessionId,
             SessionIds = sessions,
-            State = agent.Status == AgentStatus.Running ? AgentLifecycleState.Active : AgentLifecycleState.Idle,
+            State = isRunning ? AgentLifecycleState.Active : AgentLifecycleState.Idle,
             UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
         SaveProfile(updated);

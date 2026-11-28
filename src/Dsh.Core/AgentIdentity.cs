@@ -87,6 +87,8 @@ public interface IPersistentAgentManager
     AgentProfile? Get(AgentId id);
     IReadOnlyList<AgentProfile> List();
     Task<IAgent> WakeAsync(AgentId id, CancellationToken cancellationToken = default);
+    Task<IAgent> WakeSessionAsync(AgentId id, SessionId sessionId, CancellationToken cancellationToken = default)
+        => WakeAsync(id, cancellationToken);
     Task SuspendAsync(AgentId id, CancellationToken cancellationToken = default);
     Task<AgentProfile> AttachSessionAsync(AgentId id, SessionId sessionId, CancellationToken cancellationToken = default);
     Task<bool> DeleteAsync(AgentId id, CancellationToken cancellationToken = default);

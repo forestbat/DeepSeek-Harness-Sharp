@@ -101,6 +101,8 @@ namespace Dsh.Core;
 [JsonSerializable(typeof(IReadOnlyList<SessionId>))]
 [JsonSerializable(typeof(IReadOnlyList<string>))]
 [JsonSerializable(typeof(IReadOnlyDictionary<string, string>))]
+[JsonSerializable(typeof(IReadOnlyDictionary<string, MessageAttribution>))]
+[JsonSerializable(typeof(Dictionary<string, MessageAttribution>))]
 [JsonSerializable(typeof(IReadOnlyList<long>))]
 [JsonSerializable(typeof(JsonElement))]
 public sealed partial class DshCoreJsonContext : JsonSerializerContext

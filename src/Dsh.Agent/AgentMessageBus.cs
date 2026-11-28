@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -14,6 +15,8 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
         AgentEventSubscription Subscription,
         Func<AgentRuntimeEvent, ValueTask>? Handler);
 
+    private static readonly AsyncLocal<ImmutableHashSet<AgentId>?> CausalChainSlot = new();
+
     private readonly Lock _subscriptionGate = new();
     private readonly Lock _fallbackMailboxGate = new();
     private readonly List<SubscriptionEntry> _subscriptions = [];
@@ -21,6 +24,7 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
     private readonly ConcurrentDictionary<(AgentId Agent, string EnvelopeId), byte> _seenEnvelopeIds = [];
     private readonly ConcurrentDictionary<(AgentId Agent, string Key), byte> _seenIdempotencyKeys = [];
     private readonly ConcurrentDictionary<MessageId, MessageAttribution> _attributions = [];
+    private readonly ConcurrentDictionary<AgentId, SemaphoreSlim> _flushLocks = [];
 
     internal MessageAttribution? PeekAttribution(MessageId messageId)
         => _attributions.TryGetValue(messageId, out var attribution) ? attribution : null;
@@ -28,7 +32,13 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
     internal MessageAttribution? TakeAttribution(MessageId messageId)
         => _attributions.TryRemove(messageId, out var attribution) ? attribution : null;
 
-    public async Task<AgentDeliveryResult> SendAsync(AgentEnvelope envelope, CancellationToken cancellationToken = default)
+    public Task<AgentDeliveryResult> SendAsync(AgentEnvelope envelope, CancellationToken cancellationToken = default)
+        => SendCoreAsync(envelope, publishDeliveryEvent: true, cancellationToken);
+
+    internal async Task<AgentDeliveryResult> SendCoreAsync(
+        AgentEnvelope envelope,
+        bool publishDeliveryEvent,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         cancellationToken.ThrowIfCancellationRequested();
@@ -58,8 +68,11 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
         {
             MarkSeen(envelope);
             DeliverToLiveAgent(liveTarget, envelope, AgentDeliveryStatus.DeliveredLive);
-            await PublishDeliveryEventAsync(envelope, liveTarget.Id, AgentDeliveryStatus.DeliveredLive, cancellationToken)
-                .ConfigureAwait(false);
+            if (publishDeliveryEvent)
+            {
+                await PublishDeliveryEventAsync(envelope, liveTarget.Id, AgentDeliveryStatus.DeliveredLive, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             return new AgentDeliveryResult(
                 envelope.EnvelopeId,
                 AgentDeliveryStatus.DeliveredLive,
@@ -70,11 +83,14 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
         var manager = Ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName, false);
         if (envelope.WakeIfSuspended && manager?.Get(envelope.TargetAgentId) is { State: not AgentLifecycleState.Disposed })
         {
-            MarkSeen(envelope);
             var woken = await manager.WakeAsync(envelope.TargetAgentId, cancellationToken).ConfigureAwait(false);
+            MarkSeen(envelope);
             DeliverToLiveAgent(woken, envelope, AgentDeliveryStatus.WokeAndDelivered);
-            await PublishDeliveryEventAsync(envelope, woken.Id, AgentDeliveryStatus.WokeAndDelivered, cancellationToken)
-                .ConfigureAwait(false);
+            if (publishDeliveryEvent)
+            {
+                await PublishDeliveryEventAsync(envelope, woken.Id, AgentDeliveryStatus.WokeAndDelivered, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             return new AgentDeliveryResult(
                 envelope.EnvelopeId,
                 AgentDeliveryStatus.WokeAndDelivered,
@@ -104,28 +120,35 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
     public async Task<int> FlushOfflineAsync(AgentId agentId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var queued = DrainOffline(agentId);
-        if (queued.Count == 0)
-            return 0;
-
-        var target = ResolveLiveTarget(agentId, null);
-        if (target is null)
+        var flushLock = _flushLocks.GetOrAdd(agentId, static _ => new SemaphoreSlim(1, 1));
+        await flushLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
+            var target = ResolveLiveTarget(agentId, null);
+            if (target is null)
+                return 0;
+
+            var queued = PeekOffline(agentId);
+            if (queued.Count == 0)
+                return 0;
+
+            var delivered = 0;
             foreach (var envelope in queued)
-                EnqueueOffline(envelope);
-            return 0;
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                MarkSeen(envelope);
+                DeliverToLiveAgent(target, envelope, AgentDeliveryStatus.WokeAndDelivered);
+                RemoveOffline(agentId, envelope.EnvelopeId);
+                delivered++;
+                await PublishDeliveryEventAsync(envelope, target.Id, AgentDeliveryStatus.WokeAndDelivered, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            return delivered;
         }
-
-        var delivered = 0;
-        foreach (var envelope in queued)
+        finally
         {
-            MarkSeen(envelope);
-            DeliverToLiveAgent(target, envelope, AgentDeliveryStatus.WokeAndDelivered);
-            await PublishDeliveryEventAsync(envelope, target.Id, AgentDeliveryStatus.WokeAndDelivered, cancellationToken)
-                .ConfigureAwait(false);
-            delivered++;
+            flushLock.Release();
         }
-        return delivered;
     }
 
     public IReadOnlyList<AgentEnvelope> PeekOffline(AgentId agentId)
@@ -177,43 +200,55 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
             ];
         }
 
-        foreach (var entry in matched)
+        var priorChain = CausalChainSlot.Value;
+        var currentChain = (priorChain ?? ImmutableHashSet<AgentId>.Empty).Add(runtimeEvent.AgentId);
+        CausalChainSlot.Value = currentChain;
+        try
         {
-            if (entry.Handler is not null)
+            foreach (var entry in matched)
             {
-                try
+                if (entry.Handler is not null)
                 {
-                    await entry.Handler(runtimeEvent).ConfigureAwait(false);
+                    try
+                    {
+                        await entry.Handler(runtimeEvent).ConfigureAwait(false);
+                    }
+                    catch (Exception error)
+                    {
+                        Ctx.LoggerFor("agentBus").Warn(
+                            $"event handler failed for subscription \"{entry.Subscription.SubscriptionId}\": {error.Message}");
+                    }
                 }
-                catch (Exception error)
-                {
-                    Ctx.LoggerFor("agentBus").Warn(
-                        $"event handler failed for subscription \"{entry.Subscription.SubscriptionId}\": {error.Message}");
-                }
-            }
 
-            if (entry.Subscription.WakeSubscriber && entry.Subscription.SubscriberAgentId is { } subscriberId)
-            {
-                if (subscriberId == runtimeEvent.AgentId
-                    && runtimeEvent.Kind is AgentRuntimeEventKind.MessageDelivered or AgentRuntimeEventKind.AgentWoken)
+                if (entry.Subscription.WakeSubscriber && entry.Subscription.SubscriberAgentId is { } subscriberId)
                 {
-                    continue;
+                    if (currentChain.Contains(subscriberId))
+                        continue;
+                    if (subscriberId == runtimeEvent.AgentId
+                        && runtimeEvent.Kind is AgentRuntimeEventKind.MessageDelivered or AgentRuntimeEventKind.AgentWoken)
+                    {
+                        continue;
+                    }
+                    var detail = runtimeEvent.Detail is { Length: > 0 } ? $"\n{runtimeEvent.Detail}" : string.Empty;
+                    var notifyEnvelope = new AgentEnvelope(
+                        $"env-{Guid.NewGuid():N}",
+                        subscriberId,
+                        null,
+                        new MessagePrincipal(PrincipalKind.System, "agent-bus", "AgentMessageBus"),
+                        MessageTrustLevel.TrustedPeerAgent,
+                        AgentMessageIntent.Notify,
+                        $"[AGENT EVENT {runtimeEvent.Kind}] publisher={runtimeEvent.AgentId} session={runtimeEvent.SessionId}: {runtimeEvent.Summary}{detail}",
+                        runtimeEvent.CorrelationId ?? runtimeEvent.EventId,
+                        $"sub:{entry.Subscription.SubscriptionId}:{runtimeEvent.EventId}",
+                        runtimeEvent.Timestamp,
+                        WakeIfSuspended: true);
+                    await SendCoreAsync(notifyEnvelope, publishDeliveryEvent: false, cancellationToken).ConfigureAwait(false);
                 }
-                var detail = runtimeEvent.Detail is { Length: > 0 } ? $"\n{runtimeEvent.Detail}" : string.Empty;
-                var notifyEnvelope = new AgentEnvelope(
-                    $"env-{Guid.NewGuid():N}",
-                    subscriberId,
-                    null,
-                    new MessagePrincipal(PrincipalKind.System, "agent-bus", "AgentMessageBus"),
-                    MessageTrustLevel.TrustedPeerAgent,
-                    AgentMessageIntent.Notify,
-                    $"[AGENT EVENT {runtimeEvent.Kind}] publisher={runtimeEvent.AgentId} session={runtimeEvent.SessionId}: {runtimeEvent.Summary}{detail}",
-                    runtimeEvent.CorrelationId ?? runtimeEvent.EventId,
-                    $"sub:{entry.Subscription.SubscriptionId}:{runtimeEvent.EventId}",
-                    runtimeEvent.Timestamp,
-                    WakeIfSuspended: true);
-                await SendAsync(notifyEnvelope, cancellationToken).ConfigureAwait(false);
             }
+        }
+        finally
+        {
+            CausalChainSlot.Value = priorChain;
         }
     }
 
@@ -326,17 +361,21 @@ public sealed class AgentMessageBus(Context ctx) : Service(ctx, IAgentMessageBus
         }
     }
 
-    private IReadOnlyList<AgentEnvelope> DrainOffline(AgentId agentId)
+    private void RemoveOffline(AgentId agentId, string envelopeId)
     {
         if (Ctx.Get<IOfflineMailboxStore>(IOfflineMailboxStore.ServiceName, false) is { } store)
-            return store.Drain(agentId);
+        {
+            store.Remove(agentId, envelopeId);
+            return;
+        }
         lock (_fallbackMailboxGate)
         {
-            if (!_fallbackMailbox.TryGetValue(agentId, out var queue) || queue.Count == 0)
-                return [];
-            List<AgentEnvelope> drained = [.. queue];
-            queue.Clear();
-            return drained;
+            if (_fallbackMailbox.TryGetValue(agentId, out var queue))
+            {
+                queue.RemoveAll(item => string.Equals(item.EnvelopeId, envelopeId, StringComparison.Ordinal));
+                if (queue.Count == 0)
+                    _fallbackMailbox.Remove(agentId);
+            }
         }
     }
 

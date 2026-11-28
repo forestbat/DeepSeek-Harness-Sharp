@@ -197,10 +197,12 @@ public static class AgentCoordinationTools
         {
             var manager = ctx.Get<IPersistentAgentManager>(IPersistentAgentManager.ServiceName)
                 ?? throw new InvalidOperationException("agent_suspend requires the persistentAgents service");
-            var agentId = RequireStringArg(args, "agent_id");
-            await manager.SuspendAsync(AgentId.Create(agentId), exec.Signal).ConfigureAwait(false);
+            var targetId = AgentId.Create(RequireStringArg(args, "agent_id"));
+            if (exec.Agent?.AgentId == targetId)
+                throw new InvalidOperationException($"agent \"{targetId}\" cannot suspend itself from within its own running turn");
+            await manager.SuspendAsync(targetId, exec.Signal).ConfigureAwait(false);
             return JsonSerializer.SerializeToElement(
-                new AgentSuspendToolResult(AgentId.Create(agentId), true),
+                new AgentSuspendToolResult(targetId, true),
                 DshAgentJsonContext.Default.AgentSuspendToolResult);
         },
     };
@@ -269,6 +271,13 @@ public static class AgentCoordinationTools
         },
     };
 
+    private static readonly AgentRuntimeEventKind[] DefaultWakeSubscriptionKinds =
+    [
+        AgentRuntimeEventKind.TurnCompleted,
+        AgentRuntimeEventKind.TurnFailed,
+        AgentRuntimeEventKind.ApprovalRequested,
+    ];
+
     private static ToolDefinition SubscribeTool(Context ctx, List<IDisposable> subscriptions) => new()
     {
         Name = "agent_subscribe",
@@ -312,13 +321,16 @@ public static class AgentCoordinationTools
             AgentId? subscriberId = subscriberText is { Length: > 0 }
                 ? AgentId.Create(subscriberText)
                 : exec.Agent?.AgentId;
+            var wakeSubscriber = BoolArg(args, "wake_subscriber") ?? true;
             var kinds = ParseKinds(args);
+            if (kinds is null && wakeSubscriber)
+                kinds = DefaultWakeSubscriptionKinds;
             var subscription = new AgentEventSubscription(
                 $"sub-{Guid.NewGuid():N}",
                 publisherId,
                 subscriberId,
                 kinds,
-                BoolArg(args, "wake_subscriber") ?? true);
+                wakeSubscriber);
             var handle = bus.Subscribe(subscription);
             lock (subscriptions)
                 subscriptions.Add(handle);
