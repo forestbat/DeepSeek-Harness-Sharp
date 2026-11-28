@@ -22,7 +22,12 @@ public sealed class Plugin : IDshPlugin
             return new CallbackDisposable();
         var disposables = new List<IDisposable>();
         if (a2a.Enabled || a2a.Remotes.Count > 0)
-            disposables.Add(new A2aClientTools(a2a.Remotes, OutboundProxy.FromContext(ctx)).Register(ctx));
+        {
+            var clientTools = new A2aClientTools(a2a.Remotes, OutboundProxy.FromContext(ctx));
+            disposables.Add(clientTools.Register(ctx));
+            if (ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName, false) is { } router)
+                disposables.Add(router.RegisterBackend(new A2aAgentExecutionBackend(a2a.Remotes, clientTools.Client)));
+        }
         if (a2a.Enabled)
         {
             var (provider, model) = ResolveDefaults(ctx, settings);

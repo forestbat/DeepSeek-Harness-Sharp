@@ -1,8 +1,16 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Sdk;
 
 namespace Dsh.Workflow;
+
+public interface IRoutedChildPort : IChildPort
+{
+    Task<IChildHandle> StartAsync(ChildStartRequest request, string? target, AgentBackendKind? backend);
+}
 
 public sealed class WorkflowRunHost : IWorkflowRun
 {
@@ -112,7 +120,17 @@ public sealed class WorkflowRunHost : IWorkflowRun
         _result.TrySetResult(result);
     }
 
-    public sealed class SubagentChildPort(ISubagentService subagents, string provider, IAgent parent, ToolCallId? parentCallId, CancellationTokenSource controller) : IChildPort
+    internal static IChildHandle StartRemoteChild(
+        IAgentExecutionRouter router,
+        ChildStartRequest request,
+        string? target,
+        AgentBackendKind? backend,
+        string? cwd,
+        MessagePrincipal? sender,
+        CancellationToken cancellationToken)
+        => new RemoteChildHandle(router, request, target, backend, cwd, sender, cancellationToken);
+
+    public sealed class SubagentChildPort(ISubagentService subagents, string provider, IAgent parent, ToolCallId? parentCallId, CancellationTokenSource controller) : IRoutedChildPort
     {
         public async Task<IChildHandle> StartAsync(ChildStartRequest request)
         {
@@ -130,8 +148,24 @@ public sealed class WorkflowRunHost : IWorkflowRun
             return new HostChildHandle(run);
         }
 
-        private static System.Text.Json.Nodes.JsonObject ToJsonObject(object value)
-        => DshJson.ToNodeRuntime(value)?.AsObject()
+        public Task<IChildHandle> StartAsync(ChildStartRequest request, string? target, AgentBackendKind? backend)
+        {
+            var isLocal = (string.IsNullOrWhiteSpace(target) || string.Equals(target, "local", StringComparison.OrdinalIgnoreCase))
+                && (backend is null || backend == AgentBackendKind.Local);
+            if (isLocal)
+                return StartAsync(request);
+
+            var router = parent.Ctx.Get<IAgentExecutionRouter>(IAgentExecutionRouter.ServiceName, false)
+                ?? throw new WorkflowError(
+                    "remote workflow agent dispatch requires the agentExecutionRouter service",
+                    WorkflowErrorCodes.AgentStart);
+            var sender = new MessagePrincipal(PrincipalKind.Agent, parent.AgentId.Value, parent.Id.Value);
+            return Task.FromResult(StartRemoteChild(
+                router, request, target, backend, parent.Session.WorkingDirectory, sender, controller.Token));
+        }
+
+        private static JsonObject ToJsonObject(object value)
+            => DshJson.ToNodeRuntime(value)?.AsObject()
                 ?? throw new InvalidOperationException("schema could not be serialized");
     }
 
@@ -147,5 +181,87 @@ public sealed class WorkflowRunHost : IWorkflowRun
             TaskContinuationOptions.ExecuteSynchronously);
 
         public Task DisposeAsync() => run.DisposeAsync();
+    }
+
+    private sealed class RemoteChildHandle : IChildHandle
+    {
+        private readonly CancellationTokenSource _cts;
+        private IAgentExecutionHandle? _handle;
+
+        public RemoteChildHandle(
+            IAgentExecutionRouter router,
+            ChildStartRequest request,
+            string? target,
+            AgentBackendKind? backend,
+            string? cwd,
+            MessagePrincipal? sender,
+            CancellationToken cancellationToken)
+        {
+            Id = $"remote-{Guid.NewGuid():N}";
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Result = DriveAsync(router, request, target, backend, cwd, sender);
+        }
+
+        public string Id { get; }
+
+        public Task<ChildResult> Result { get; }
+
+        private async Task<ChildResult> DriveAsync(
+            IAgentExecutionRouter router,
+            ChildStartRequest request,
+            string? target,
+            AgentBackendKind? backend,
+            string? cwd,
+            MessagePrincipal? sender)
+        {
+            var dispatch = new AgentDispatchRequest(
+                TargetId: string.IsNullOrWhiteSpace(target) ? null : target,
+                PreferredBackend: backend,
+                Prompt: request.Prompt,
+                Cwd: cwd,
+                WaitForCompletion: true,
+                Sender: sender);
+            _handle = await router.DispatchAsync(dispatch, _cts.Token).ConfigureAwait(false);
+            var snapshot = await _handle.GetStatusAsync(_cts.Token).ConfigureAwait(false);
+            if (snapshot.Error is { Length: > 0 })
+            {
+                return new ChildResult(
+                    snapshot.Output is { Length: > 0 } partial ? [new TextBlock(partial)] : [],
+                    null,
+                    WorkflowAgentOutcome.Failed);
+            }
+            var text = snapshot.Output ?? snapshot.Summary ?? "";
+            IReadOnlyList<ContentBlock> blocks = text.Length > 0 ? [new TextBlock(text)] : [];
+            object? structured = null;
+            if (request.Schema is not null)
+            {
+                var node = JsonNode.Parse(text)
+                    ?? throw new WorkflowError("remote agent returned empty JSON for schema", WorkflowErrorCodes.AgentResult);
+                var schemaObject = DshJson.ToNodeRuntime(request.Schema)?.AsObject()
+                    ?? throw new WorkflowError("workflow schema could not be serialized", WorkflowErrorCodes.UnsupportedSchema);
+                using var doc = JsonDocument.Parse(node.ToJsonString());
+                var violations = JsonSchemaValidator.Validate(schemaObject, doc.RootElement, "value");
+                if (violations.Count > 0)
+                    throw new WorkflowError($"remote agent output failed schema validation: {string.Join("; ", violations)}", WorkflowErrorCodes.AgentResult);
+                structured = WorkflowRealm.MaterializeFromRealm(node, "remote child result");
+            }
+            return new ChildResult(blocks, structured, SubagentStopReasonWire.Of(SubagentStopReason.Completed));
+        }
+
+        public async Task DisposeAsync()
+        {
+            await _cts.CancelAsync().ConfigureAwait(false);
+            if (_handle is { } handle)
+            {
+                try
+                {
+                    await handle.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                }
+            }
+            _cts.Dispose();
+        }
     }
 }
