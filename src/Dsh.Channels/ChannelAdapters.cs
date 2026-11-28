@@ -67,11 +67,12 @@ public sealed class WebhookChannelAdapter(ExternalChannelRouter router, Func<Htt
         if (verifiedBinding is null)
             return new WebhookHandleResult(401, JsonError("Missing or invalid X-Hub-Signature-256."));
 
+        var effectiveDeliveryId = string.IsNullOrWhiteSpace(deliveryId) ? $"gh-{Guid.NewGuid():N}" : deliveryId;
         var inbound = new ChannelInboundMessage(
             verifiedBinding.BindingId,
             Kind,
             repository ?? verifiedBinding.ChannelKey,
-            string.IsNullOrWhiteSpace(deliveryId) ? $"gh-{Guid.NewGuid():N}" : deliveryId,
+            effectiveDeliveryId,
             sender ?? "github",
             sender ?? "GitHub",
             summary,
@@ -84,8 +85,10 @@ public sealed class WebhookChannelAdapter(ExternalChannelRouter router, Func<Htt
                 ["x-github-event"] = eventName,
             });
 
-        var triggersFired = await router.FireTriggerAsync(Kind, eventName, summary, cancellationToken).ConfigureAwait(false);
         var delivery = await router.DispatchInboundAsync(inbound, cancellationToken).ConfigureAwait(false);
+        var triggersFired = delivery.Status is AgentDeliveryStatus.Deduplicated or AgentDeliveryStatus.Rejected
+            ? 0
+            : await router.FireTriggerAsync(Kind, eventName, summary, effectiveDeliveryId, cancellationToken).ConfigureAwait(false);
 
         var ack = JsonSerializer.Serialize(
             new WebhookAckResponse(true, delivery.Status.ToString(), delivery.EnvelopeId, triggersFired),

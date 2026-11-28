@@ -165,6 +165,7 @@ public sealed class RemoteHostServer(
         private string? _clientName;
         private string? _principalId;
         private RoomRole _role = RoomRole.Owner;
+        private RoomId? _scopedRoomId;
         private bool _inviteAuthenticated;
         private bool _allowCollaboratorApprovals;
 
@@ -184,7 +185,8 @@ public sealed class RemoteHostServer(
             id,
             _principalId ?? _clientName ?? id,
             _clientName ?? _principalId,
-            _role);
+            _role,
+            _scopedRoomId);
 
         /** Chunked uploads started on this connection; discarded when it ends. */
         public HostUploads Uploads { get; } = new();
@@ -286,6 +288,8 @@ public sealed class RemoteHostServer(
         private void Authorize(HostAction action)
         {
             EnsureAuthenticated();
+            if (_inviteAuthenticated && action is HostAction.Admin or HostAction.MutateSession)
+                throw new LocalRpcException($"invite-scoped role {_role} is not authorized to perform this operation") { ErrorCode = Unauthorized };
             var allowed = _role switch
             {
                 RoomRole.Owner => true,
@@ -300,6 +304,28 @@ public sealed class RemoteHostServer(
             };
             if (!allowed)
                 throw new LocalRpcException($"role {_role} is not authorized to perform this operation") { ErrorCode = Unauthorized };
+        }
+
+        private async Task AuthorizeSessionAccessAsync(string sessionId, string requiredRoomAction, CancellationToken cancellationToken)
+        {
+            if (!_inviteAuthenticated)
+                return;
+            if (Backend.Mesh is not { } mesh
+                || !await mesh.CanAccessSessionAsync(MeshCaller, sessionId, requiredRoomAction, cancellationToken).ConfigureAwait(false))
+            {
+                throw new LocalRpcException($"invite-scoped role {_role} is not authorized to access session '{sessionId}'") { ErrorCode = Unauthorized };
+            }
+        }
+
+        private async Task<(bool Restricted, string? AllowedSessionId)> AuthorizePendingSessionAsync(string requestId, string kind, CancellationToken cancellationToken)
+        {
+            if (!_inviteAuthenticated)
+                return (false, null);
+            var sessionId = Backend.Pending.GetSessionId(requestId, kind);
+            if (sessionId is null)
+                return (true, null);
+            await AuthorizeSessionAccessAsync(sessionId, RoomActions.Approve, cancellationToken).ConfigureAwait(false);
+            return (true, sessionId);
         }
 
         public async Task<HostHelloResponse> HelloAsync(HostHelloRequest request, CancellationToken cancellationToken)
@@ -344,6 +370,7 @@ public sealed class RemoteHostServer(
                 _inviteAuthenticated = true;
                 _principalId = invited.PrincipalId;
                 _role = invited.Role;
+                _scopedRoomId = invited.RoomId;
                 _allowCollaboratorApprovals = invited.AllowCollaboratorApprovals;
             }
             else
@@ -351,6 +378,7 @@ public sealed class RemoteHostServer(
                 _inviteAuthenticated = false;
                 _principalId = string.IsNullOrWhiteSpace(principalId) ? null : principalId;
                 _role = RoomRole.Owner;
+                _scopedRoomId = null;
                 _allowCollaboratorApprovals = false;
             }
             if (_authenticated)
@@ -405,13 +433,15 @@ public sealed class RemoteHostServer(
         public async Task<bool> SendMessageAsync(RemoteMessageRequest request, CancellationToken cancellationToken)
         {
             Authorize(HostAction.SendMessage);
+            await AuthorizeSessionAccessAsync(request.SessionId, RoomActions.PromptAgent, cancellationToken).ConfigureAwait(false);
             await Backend.Session.SendMessageAsync(request.SessionId, request.Text, request.Images ?? [], cancellationToken).ConfigureAwait(false);
             return true;
         }
 
         public async Task<bool> InterruptAsync(RemoteSessionRef request, CancellationToken cancellationToken)
         {
-            Authorize(HostAction.MutateSession);
+            Authorize(HostAction.SendMessage);
+            await AuthorizeSessionAccessAsync(request.SessionId, RoomActions.PromptAgent, cancellationToken).ConfigureAwait(false);
             await Backend.Session.InterruptAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
             return true;
         }
@@ -457,16 +487,24 @@ public sealed class RemoteHostServer(
             return Task.FromResult(Backend.Pending.List());
         }
 
-        public Task<bool> RespondApprovalAsync(RemoteApprovalResponse request, CancellationToken cancellationToken)
+        public async Task<bool> RespondApprovalAsync(RemoteApprovalResponse request, CancellationToken cancellationToken)
         {
             Authorize(HostAction.Approve);
-            return Task.FromResult(Backend.Pending.RespondApproval(request, Resolver));
+            var (restricted, allowedSessionId) = await AuthorizePendingSessionAsync(request.RequestId, PendingKinds.Approval, cancellationToken).ConfigureAwait(false);
+            return Backend.Pending.RespondApproval(
+                request,
+                Resolver,
+                restricted ? sid => allowedSessionId is not null && string.Equals(sid, allowedSessionId, StringComparison.Ordinal) : null);
         }
 
-        public Task<bool> RespondQuestionAsync(RemoteQuestionResponse request, CancellationToken cancellationToken)
+        public async Task<bool> RespondQuestionAsync(RemoteQuestionResponse request, CancellationToken cancellationToken)
         {
             Authorize(HostAction.Approve);
-            return Task.FromResult(Backend.Pending.RespondQuestion(request, Resolver));
+            var (restricted, allowedSessionId) = await AuthorizePendingSessionAsync(request.RequestId, PendingKinds.Question, cancellationToken).ConfigureAwait(false);
+            return Backend.Pending.RespondQuestion(
+                request,
+                Resolver,
+                restricted ? sid => allowedSessionId is not null && string.Equals(sid, allowedSessionId, StringComparison.Ordinal) : null);
         }
 
         private Task StartPtyPumpAsync(IRemotePtyBackend backend, string subscriptionId, string ptyId)
@@ -491,7 +529,7 @@ public sealed class RemoteHostServer(
                 if (backend.Notifications is { } notifications)
                     subscriptions.Add(await notifications.SubscribeAsync(lifetime).ConfigureAwait(false));
                 if (backend.Mesh is { } mesh)
-                    subscriptions.Add(await mesh.SubscribeAsync(lifetime).ConfigureAwait(false));
+                    subscriptions.Add(await mesh.SubscribeAsync(MeshCaller, lifetime).ConfigureAwait(false));
                 lock (_subscriptions)
                 {
                     if (_stopped)
@@ -680,7 +718,7 @@ public sealed class RemoteHostServer(
         public Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken)
         {
             authorize(HostAction.Read);
-            return backend.ListAgentsAsync(cancellationToken);
+            return backend.ListAgentsAsync(caller(), cancellationToken);
         }
 
         public Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, CancellationToken cancellationToken)
@@ -701,15 +739,21 @@ public sealed class RemoteHostServer(
             return backend.SuspendAgentAsync(request.AgentId, caller(), cancellationToken);
         }
 
-        public Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, CancellationToken cancellationToken)
+        public async Task<AgentDeliveryResult> SendToAgentAsync(RemoteMeshSendRequest request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.MutateSession);
-            return backend.SendToAgentAsync(request, caller(), cancellationToken);
+            authorize(HostAction.SendMessage);
+            var currentCaller = caller();
+            if (currentCaller.IsInviteScoped && !string.IsNullOrWhiteSpace(request.TargetSessionId)
+                && !await backend.CanAccessSessionAsync(currentCaller, request.TargetSessionId, RoomActions.PromptAgent, cancellationToken).ConfigureAwait(false))
+            {
+                throw new LocalRpcException($"invite-scoped role {currentCaller.Role} is not authorized to prompt session '{request.TargetSessionId}'") { ErrorCode = Unauthorized };
+            }
+            return await backend.SendToAgentAsync(request, currentCaller, cancellationToken).ConfigureAwait(false);
         }
 
         public Task<IReadOnlyList<RemoteExecutionTarget>> ListTargetsAsync(CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.Admin);
             return backend.ListTargetsAsync(cancellationToken);
         }
 
@@ -733,7 +777,7 @@ public sealed class RemoteHostServer(
 
         public Task<CollaborationRoom> JoinRoomAsync(RemoteRoomJoinRequest request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.SendMessage);
+            authorize(HostAction.MutateSession);
             return backend.JoinRoomAsync(request, caller(), cancellationToken);
         }
 
@@ -751,7 +795,7 @@ public sealed class RemoteHostServer(
 
         public Task<IReadOnlyList<DiscoveredAgentCard>> DiscoverAgentsAsync(RemoteDiscoveryQuery? request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.Admin);
             return backend.DiscoverAgentsAsync(request, cancellationToken);
         }
 
@@ -769,13 +813,13 @@ public sealed class RemoteHostServer(
 
         public Task<IReadOnlyList<AgentTrustRecord>> ListTrustAsync(CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.Admin);
             return backend.ListTrustAsync(cancellationToken);
         }
 
         public Task<IReadOnlyList<ChannelBinding>> ListChannelsAsync(CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.Admin);
             return backend.ListChannelsAsync(cancellationToken);
         }
 
@@ -787,7 +831,7 @@ public sealed class RemoteHostServer(
 
         public Task<IReadOnlyList<AutomationTriggerRule>> ListTriggersAsync(CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.Admin);
             return backend.ListTriggersAsync(cancellationToken);
         }
     }
@@ -853,13 +897,13 @@ public sealed class RemoteHostServer(
 
         public Task<bool> AttachAsync(RemotePtyAttachRequest request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.MutateSession);
             return inner.AttachAsync(request, cancellationToken);
         }
 
         public Task<bool> DetachAsync(RemoteSubscriptionRef request, CancellationToken cancellationToken)
         {
-            authorize(HostAction.Read);
+            authorize(HostAction.MutateSession);
             return inner.DetachAsync(request, cancellationToken);
         }
 
@@ -1004,10 +1048,7 @@ public sealed class RemoteHostServer(
         public Task<RemoteCommandResult> ExecuteCommandAsync(RemoteCommandRequest request, CancellationToken cancellationToken)
         {
             var trimmed = request.Line.TrimStart();
-            if (IsAdminSlashCommand(trimmed))
-                authorize(HostAction.Admin);
-            else
-                authorize(HostAction.SendMessage);
+            authorize(IsAdminSlashCommand(trimmed) ? HostAction.Admin : HostAction.MutateSession);
             return inner.ExecuteCommandAsync(request, cancellationToken);
         }
 
@@ -1051,6 +1092,7 @@ public sealed class RemoteHostServer(
 
         public Task<bool> SetApprovalPolicyAsync(RemoteSessionPolicyRequest request, CancellationToken cancellationToken)
         {
+            authorize(HostAction.MutateSession);
             authorize(HostAction.Approve);
             return inner.SetApprovalPolicyAsync(request, cancellationToken);
         }

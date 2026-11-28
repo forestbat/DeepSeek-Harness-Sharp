@@ -24,9 +24,9 @@ public sealed class HostPathPolicy(IReadOnlyList<string> fixedRoots, Func<IEnume
     {
         var trimmed = path.Trim();
         if (trimmed.Length == 0 || trimmed == "~")
-            return Home;
+            return Path.GetFullPath(Home);
         if (trimmed.StartsWith("~/", StringComparison.Ordinal) || trimmed.StartsWith("~\\", StringComparison.Ordinal))
-            return Path.Combine(Home, trimmed[2..]);
+            return Path.GetFullPath(Path.Combine(Home, trimmed[2..]));
         return Path.GetFullPath(trimmed);
     }
 
@@ -47,7 +47,7 @@ public sealed class HostPathPolicy(IReadOnlyList<string> fixedRoots, Func<IEnume
     {
         var expanded = Expand(path);
         var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(expanded));
-        var resolved = parent is null ? expanded : Path.Combine(RealPath(parent), Path.GetFileName(Path.TrimEndingDirectorySeparator(expanded)));
+        var resolved = parent is null ? expanded : Path.GetFullPath(Path.Combine(RealPath(parent), Path.GetFileName(Path.TrimEndingDirectorySeparator(expanded))));
         if (!IsAllowed(resolved))
             throw new UnauthorizedAccessException($"path is outside the host's allowed roots: {path}");
         return resolved;
@@ -55,7 +55,10 @@ public sealed class HostPathPolicy(IReadOnlyList<string> fixedRoots, Func<IEnume
 
     /** Whether an already resolved absolute path lies inside an allowed root. */
     public bool IsAllowed(string resolvedPath)
-        => fixedRoots.Concat(sessionRoots()).Any(root => IsUnder(resolvedPath, RealPath(Path.GetFullPath(root))));
+    {
+        var canonical = Path.GetFullPath(resolvedPath);
+        return fixedRoots.Concat(sessionRoots()).Any(root => IsUnder(canonical, RealPath(Path.GetFullPath(root))));
+    }
 
     private static bool IsUnder(string path, string root)
     {
@@ -69,16 +72,17 @@ public sealed class HostPathPolicy(IReadOnlyList<string> fixedRoots, Func<IEnume
     /** Resolves symbolic links in every existing component of an absolute path; missing trailing components are kept as written. */
     private static string RealPath(string fullPath, int hops = 0)
     {
+        fullPath = Path.GetFullPath(fullPath);
         var root = Path.GetPathRoot(fullPath) ?? "";
         var current = root;
         foreach (var part in fullPath[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
-            var next = Path.Combine(current, part);
+            var next = Path.GetFullPath(Path.Combine(current, part));
             var entry = new FileInfo(next);
             if (entry.LinkTarget is not null && hops < MaxLinkHops && entry.ResolveLinkTarget(returnFinalTarget: true) is { } target)
-                next = RealPath(target.FullName, hops + 1);
+                next = RealPath(Path.GetFullPath(target.FullName), hops + 1);
             current = next;
         }
-        return current;
+        return Path.GetFullPath(current);
     }
 }

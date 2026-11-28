@@ -173,6 +173,15 @@ public sealed class CollaborationRoomService : Service, ICollaborationRoomServic
                     throw new InvalidOperationException("Invite has expired.");
                 if (invite.UsedCount >= invite.MaxUses)
                     throw new InvalidOperationException("Invite has reached its maximum uses.");
+                if (string.Equals(state.Room.OwnerPrincipalId, joiner.Id, StringComparison.Ordinal)
+                    || state.Room.Participants.Any(p =>
+                        string.Equals(p.PrincipalId, joiner.Id, StringComparison.Ordinal)
+                        || (p.AgentId is { } existingAgent && string.Equals(existingAgent.Value, joiner.Id, StringComparison.Ordinal))
+                        || (agentId is { } requestedAgent && (p.AgentId == requestedAgent || string.Equals(p.PrincipalId, requestedAgent.Value, StringComparison.Ordinal))))
+                    || (agentId is { } targetAgent && string.Equals(state.Room.OwnerPrincipalId, targetAgent.Value, StringComparison.Ordinal)))
+                {
+                    throw new InvalidOperationException($"Principal '{joiner.Id}' is already a participant or owner of room '{state.Room.Id.Value}'.");
+                }
 
                 state.Invites[inviteIndex] = invite with { UsedCount = invite.UsedCount + 1 };
                 var resolvedRole = invite.Role;
@@ -184,7 +193,7 @@ public sealed class CollaborationRoomService : Service, ICollaborationRoomServic
                     now,
                     joiner.MachineId,
                     agentId);
-                updatedRoom = UpsertParticipant(state.Room, participant, now);
+                updatedRoom = state.Room with { Participants = [.. state.Room.Participants, participant], UpdatedAt = now };
                 state.Room = updatedRoom;
                 snapshot = CaptureRoomsDocumentLocked();
             }
@@ -570,7 +579,14 @@ public sealed class CollaborationRoomService : Service, ICollaborationRoomServic
     private static AgentId? ResolveTargetAgent(CollaborationRoom room, string body, AgentId? explicitTarget)
     {
         if (explicitTarget is { } target)
+        {
+            var isParticipant = room.Participants.Any(p =>
+                (p.Role == RoomRole.AgentParticipant || p.AgentId is not null)
+                && (p.AgentId == target || string.Equals(p.PrincipalId, target.Value, StringComparison.Ordinal)));
+            if (!isParticipant)
+                throw new UnauthorizedAccessException($"Agent '{target.Value}' is not an agent participant of room '{room.Id.Value}'.");
             return target;
+        }
 
         var agentParticipants = room.Participants
             .Where(p => p.Role == RoomRole.AgentParticipant || p.AgentId is not null)

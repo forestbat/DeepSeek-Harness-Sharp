@@ -27,7 +27,11 @@ public sealed record HostMeshCaller(
     string ConnectionId,
     string PrincipalId,
     string? ClientName,
-    RoomRole Role);
+    RoomRole Role,
+    RoomId? ScopedRoomId = null)
+{
+    public bool IsInviteScoped => ScopedRoomId is not null;
+}
 
 public sealed record HostConnectionIdentity(
     string PrincipalId,
@@ -43,9 +47,12 @@ public interface IRemoteMeshBackend
     bool SupportsChannels { get; }
 
     Task<HostConnectionIdentity?> ResolveInviteAsync(string inviteToken, string? principalId, string? displayName, CancellationToken cancellationToken);
-    Task<HostSubscription> SubscribeAsync(CancellationToken cancellationToken);
+    Task<HostSubscription> SubscribeAsync(HostMeshCaller caller, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(CancellationToken cancellationToken);
+    Task<bool> CanAccessSessionAsync(HostMeshCaller caller, string sessionId, string requiredRoomAction, CancellationToken cancellationToken)
+        => Task.FromResult(!caller.IsInviteScoped);
+
+    Task<IReadOnlyList<AgentProfile>> ListAgentsAsync(HostMeshCaller caller, CancellationToken cancellationToken);
     Task<AgentProfile> CreateAgentAsync(AgentProfileRegistration request, HostMeshCaller caller, CancellationToken cancellationToken);
     Task<AgentProfile> WakeAgentAsync(string agentId, HostMeshCaller caller, CancellationToken cancellationToken);
     Task<bool> SuspendAgentAsync(string agentId, HostMeshCaller caller, CancellationToken cancellationToken);

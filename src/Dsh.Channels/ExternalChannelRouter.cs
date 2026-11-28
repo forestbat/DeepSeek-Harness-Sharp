@@ -28,8 +28,8 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
     private readonly Dictionary<string, string> _secrets = new(StringComparer.Ordinal);
     private readonly Queue<string> _dedupOrder = new();
     private readonly HashSet<string> _dedupSet = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _inFlightDedup = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingReplyRoute> _pendingReplies = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _forwardedCorrelations = new(StringComparer.Ordinal);
     private readonly AutomationTriggerEngine _triggerEngine;
     private bool _disposed;
 
@@ -157,17 +157,14 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
         {
             if (!string.IsNullOrWhiteSpace(bindingId))
             {
-                return _bindings.TryGetValue(bindingId, out var exact) && exact.Enabled
+                return _bindings.TryGetValue(bindingId, out var exact)
+                    && BindingMatches(exact, adapterKind, channelKey)
                     ? [exact]
                     : [];
             }
 
             return _bindings.Values
-                .Where(b => b.Enabled
-                    && AdapterMatches(b.AdapterKind, adapterKind)
-                    && (string.IsNullOrWhiteSpace(channelKey)
-                        || b.ChannelKey == "*"
-                        || string.Equals(b.ChannelKey, channelKey, StringComparison.OrdinalIgnoreCase)))
+                .Where(b => BindingMatches(b, adapterKind, channelKey))
                 .OrderByDescending(b => string.Equals(b.ChannelKey, channelKey, StringComparison.OrdinalIgnoreCase))
                 .ThenBy(b => b.CreatedAt)
                 .ToList();
@@ -188,38 +185,6 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
                 Reason: binding is null ? "Channel binding not found." : "Channel binding is disabled.");
         }
 
-        var dedupKey = string.IsNullOrWhiteSpace(message.ExternalMessageId)
-            ? null
-            : $"{binding.BindingId}:{message.ExternalMessageId}";
-        if (dedupKey is not null)
-        {
-            var duplicate = false;
-            ChannelDedupDocument? dedupSnapshot = null;
-            lock (_stateLock)
-            {
-                if (_dedupSet.Contains(dedupKey))
-                    duplicate = true;
-                else
-                {
-                    RecordDedupLocked(dedupKey);
-                    dedupSnapshot = new ChannelDedupDocument([.. _dedupOrder]);
-                }
-            }
-            if (duplicate)
-            {
-                return new AgentDeliveryResult(
-                    envelopeId,
-                    AgentDeliveryStatus.Deduplicated,
-                    binding.TargetAgentId,
-                    Reason: "Duplicate external message ID.");
-            }
-            if (dedupSnapshot is not null)
-                await PersistDedupAsync(dedupSnapshot, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (binding.TargetRoomId is { } roomId)
-            await TryBridgeToRoomAsync(roomId, binding, message, cancellationToken).ConfigureAwait(false);
-
         var bus = Ctx.Get<IAgentMessageBus>(IAgentMessageBus.ServiceName, false);
         if (bus is null)
         {
@@ -230,57 +195,112 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
                 Reason: "IAgentMessageBus is not available.");
         }
 
-        _triggerEngine.EnsureSubscribed(binding.TargetAgentId, bus);
-
-        var correlationId = !string.IsNullOrWhiteSpace(message.ThreadId)
-            ? $"channel:{binding.BindingId}:{message.ThreadId}"
-            : $"channel:{binding.BindingId}:{message.ExternalMessageId}";
-        var trustLevel = ResolveTrustLevel(binding, message);
-        var sender = new MessagePrincipal(
-            PrincipalKind.ExternalChannel,
-            message.SenderId,
-            string.IsNullOrWhiteSpace(message.SenderName) ? message.SenderId : message.SenderName,
-            ChannelId: binding.BindingId);
-
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["bindingId"] = binding.BindingId,
-            ["adapterKind"] = binding.AdapterKind,
-            ["channelKey"] = message.ChannelKey,
-            ["externalMessageId"] = message.ExternalMessageId,
-        };
-        if (!string.IsNullOrWhiteSpace(message.ThreadId))
-            metadata["threadId"] = message.ThreadId;
-        if (!string.IsNullOrWhiteSpace(message.EventType))
-            metadata["eventType"] = message.EventType;
-
-        if (!string.IsNullOrWhiteSpace(binding.OutboundUrl) && !IsAutoReplyDisabled(binding))
+        var dedupKey = string.IsNullOrWhiteSpace(message.ExternalMessageId)
+            ? null
+            : $"{binding.BindingId}:{message.ExternalMessageId}";
+        var acquiredInFlight = false;
+        if (dedupKey is not null)
         {
             lock (_stateLock)
-                _pendingReplies[correlationId] = new PendingReplyRoute(binding.BindingId, message.ThreadId, message.ExternalMessageId);
+            {
+                if (_dedupSet.Contains(dedupKey) || !_inFlightDedup.Add(dedupKey))
+                {
+                    return new AgentDeliveryResult(
+                        envelopeId,
+                        AgentDeliveryStatus.Deduplicated,
+                        binding.TargetAgentId,
+                        Reason: "Duplicate external message ID.");
+                }
+                acquiredInFlight = true;
+            }
         }
 
-        var envelope = new AgentEnvelope(
-            envelopeId,
-            binding.TargetAgentId,
-            null,
-            sender,
-            trustLevel,
-            AgentMessageIntent.Task,
-            message.Body,
-            correlationId,
-            dedupKey ?? envelopeId,
-            message.Timestamp > 0 ? message.Timestamp : _clock.GetUtcNow().ToUnixTimeMilliseconds(),
-            WakeIfSuspended: true,
-            metadata);
+        string? registeredReplyCorrelation = null;
+        var delivered = false;
+        try
+        {
+            if (binding.TargetRoomId is { } roomId)
+                await TryBridgeToRoomAsync(roomId, binding, message, cancellationToken).ConfigureAwait(false);
 
-        var result = await bus.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
-        if (result.Status == AgentDeliveryStatus.Rejected)
+            _triggerEngine.EnsureSubscribed(binding.TargetAgentId, bus);
+
+            var messageKey = !string.IsNullOrWhiteSpace(message.ExternalMessageId)
+                ? message.ExternalMessageId
+                : envelopeId;
+            var correlationId = !string.IsNullOrWhiteSpace(message.ThreadId)
+                ? $"channel:{binding.BindingId}:{message.ThreadId}:{messageKey}"
+                : $"channel:{binding.BindingId}:{messageKey}";
+            var trustLevel = ResolveTrustLevel(binding, message);
+            var sender = new MessagePrincipal(
+                PrincipalKind.ExternalChannel,
+                message.SenderId,
+                string.IsNullOrWhiteSpace(message.SenderName) ? message.SenderId : message.SenderName,
+                ChannelId: binding.BindingId);
+
+            var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["bindingId"] = binding.BindingId,
+                ["adapterKind"] = binding.AdapterKind,
+                ["channelKey"] = message.ChannelKey,
+                ["externalMessageId"] = message.ExternalMessageId,
+            };
+            if (!string.IsNullOrWhiteSpace(message.ThreadId))
+                metadata["threadId"] = message.ThreadId;
+            if (!string.IsNullOrWhiteSpace(message.EventType))
+                metadata["eventType"] = message.EventType;
+
+            if (!string.IsNullOrWhiteSpace(binding.OutboundUrl) && !IsAutoReplyDisabled(binding))
+            {
+                lock (_stateLock)
+                {
+                    _pendingReplies[correlationId] = new PendingReplyRoute(binding.BindingId, message.ThreadId, message.ExternalMessageId);
+                    registeredReplyCorrelation = correlationId;
+                }
+            }
+
+            var envelope = new AgentEnvelope(
+                envelopeId,
+                binding.TargetAgentId,
+                null,
+                sender,
+                trustLevel,
+                AgentMessageIntent.Task,
+                message.Body,
+                correlationId,
+                dedupKey ?? envelopeId,
+                message.Timestamp > 0 ? message.Timestamp : _clock.GetUtcNow().ToUnixTimeMilliseconds(),
+                WakeIfSuspended: true,
+                metadata);
+
+            var result = await bus.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
+            if (result.Status != AgentDeliveryStatus.Rejected)
+            {
+                delivered = true;
+                if (dedupKey is not null)
+                {
+                    ChannelDedupDocument dedupSnapshot;
+                    lock (_stateLock)
+                    {
+                        _inFlightDedup.Remove(dedupKey);
+                        acquiredInFlight = false;
+                        RecordDedupLocked(dedupKey);
+                        dedupSnapshot = new ChannelDedupDocument([.. _dedupOrder]);
+                    }
+                    await PersistDedupAsync(dedupSnapshot, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            return result;
+        }
+        finally
         {
             lock (_stateLock)
-                _pendingReplies.Remove(correlationId);
+            {
+                if (acquiredInFlight && dedupKey is not null)
+                    _inFlightDedup.Remove(dedupKey);
+                if (!delivered && registeredReplyCorrelation is not null)
+                    _pendingReplies.Remove(registeredReplyCorrelation);
+            }
         }
-        return result;
     }
 
     public async Task SendOutboundAsync(ChannelOutboundMessage message, CancellationToken cancellationToken = default)
@@ -363,7 +383,15 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
             return _triggers.Values.OrderBy(t => t.CreatedAt).ThenBy(t => t.RuleId, StringComparer.Ordinal).ToList();
     }
 
-    public async Task<int> FireTriggerAsync(string sourceKind, string eventName, string payloadSummary, CancellationToken cancellationToken = default)
+    public Task<int> FireTriggerAsync(string sourceKind, string eventName, string payloadSummary, CancellationToken cancellationToken = default)
+        => FireTriggerAsync(sourceKind, eventName, payloadSummary, deliveryId: null, cancellationToken);
+
+    internal async Task<int> FireTriggerAsync(
+        string sourceKind,
+        string eventName,
+        string payloadSummary,
+        string? deliveryId,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceKind);
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
@@ -390,6 +418,7 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
         {
             _triggerEngine.EnsureSubscribed(rule.TargetAgentId, bus);
             var body = FormatTriggerPrompt(rule.PromptTemplate, sourceKind, eventName, payloadSummary);
+            var idempotencyKey = string.IsNullOrWhiteSpace(deliveryId) ? null : $"trigger:{rule.RuleId}:{deliveryId}";
             var envelope = new AgentEnvelope(
                 $"trg-{Guid.NewGuid():N}",
                 rule.TargetAgentId,
@@ -399,7 +428,7 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
                 AgentMessageIntent.Task,
                 body,
                 $"trigger:{rule.RuleId}:{Guid.NewGuid():N}",
-                null,
+                idempotencyKey,
                 now,
                 WakeIfSuspended: rule.WakeAgent,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -425,11 +454,8 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
         PendingReplyRoute? route;
         lock (_stateLock)
         {
-            if (!_pendingReplies.TryGetValue(runtimeEvent.CorrelationId, out route))
+            if (!_pendingReplies.Remove(runtimeEvent.CorrelationId, out route))
                 return;
-            if (!_forwardedCorrelations.Add(runtimeEvent.CorrelationId))
-                return;
-            _pendingReplies.Remove(runtimeEvent.CorrelationId);
         }
 
         var replyText = ExtractReplyText(runtimeEvent);
@@ -483,14 +509,23 @@ public sealed class ExternalChannelRouter : Service, IExternalChannelRouter, IDi
     {
         lock (_stateLock)
         {
-            if (!string.IsNullOrWhiteSpace(message.BindingId) && _bindings.TryGetValue(message.BindingId, out var direct))
-                return direct;
-            return _bindings.Values.FirstOrDefault(b =>
-                b.Enabled
-                && AdapterMatches(b.AdapterKind, message.AdapterKind)
-                && (b.ChannelKey == "*" || string.Equals(b.ChannelKey, message.ChannelKey, StringComparison.OrdinalIgnoreCase)));
+            if (!string.IsNullOrWhiteSpace(message.BindingId))
+            {
+                return _bindings.TryGetValue(message.BindingId, out var direct)
+                    && BindingMatches(direct, message.AdapterKind, message.ChannelKey)
+                    ? direct
+                    : null;
+            }
+            return _bindings.Values.FirstOrDefault(b => BindingMatches(b, message.AdapterKind, message.ChannelKey));
         }
     }
+
+    private static bool BindingMatches(ChannelBinding binding, string adapterKind, string? channelKey)
+        => binding.Enabled
+            && AdapterMatches(binding.AdapterKind, adapterKind)
+            && (string.IsNullOrWhiteSpace(channelKey)
+                || binding.ChannelKey == "*"
+                || string.Equals(binding.ChannelKey, channelKey, StringComparison.OrdinalIgnoreCase));
 
     private async Task TryBridgeToRoomAsync(
         RoomId roomId,

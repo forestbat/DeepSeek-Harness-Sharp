@@ -7,6 +7,8 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Dsh.Agent;
+using Dsh.Collab;
 using Dsh.Core;
 using Dsh.Gui;
 using Dsh.Gui.ViewModels;
@@ -67,6 +69,8 @@ public sealed class MeshHostAndGuiTests
 
         var room = await mesh.CreateRoomAsync("design-room", new RoomPolicy(), Ct);
         Assert.Single(await mesh.ListRoomsAsync(Ct));
+        var rooms = harness.Ctx.Get<ICollaborationRoomService>(ICollaborationRoomService.ServiceName)!;
+        await rooms.AddAgentAsync(room.Id, new MessagePrincipal(PrincipalKind.Human, room.OwnerPrincipalId, "Owner"), createdAgent.AgentId, createdAgent.Name, Ct);
         var invite = await mesh.CreateInviteAsync(room.Id.Value, RoomRole.Collaborator, cancellationToken: Ct);
         var posted = await mesh.PostRoomMessageAsync(room.Id.Value, "hello mesh", createdAgent.AgentId.Value, cancellationToken: Ct);
         Assert.Equal("hello mesh", posted.Body);
@@ -101,14 +105,18 @@ public sealed class MeshHostAndGuiTests
         Assert.Equal(nameof(RoomRole.Owner), owner.Hello.Role);
         var ownerMesh = owner.GetCapability<IWorkspaceMesh>()!;
         var session = await owner.CreateSessionAsync(host.Directory, Ct);
-        var agent = await ownerMesh.CreateAgentAsync(new AgentProfileRegistration("worker"), Ct);
+        var unrelatedSession = await owner.CreateSessionAsync(host.Directory, Ct);
+        var agent = await ownerMesh.CreateAgentAsync(new AgentProfileRegistration("worker", InitialSessionId: SessionId.Create(session.SessionId)), Ct);
+        var rooms = harness.Ctx.Get<ICollaborationRoomService>(ICollaborationRoomService.ServiceName)!;
 
         var restrictedRoom = await ownerMesh.CreateRoomAsync("restricted", new RoomPolicy(AllowCollaboratorApprovals: false), Ct);
+        await rooms.AddAgentAsync(restrictedRoom.Id, new MessagePrincipal(PrincipalKind.Human, restrictedRoom.OwnerPrincipalId, "Owner"), agent.AgentId, agent.Name, Ct);
         var observerInvite = await ownerMesh.CreateInviteAsync(restrictedRoom.Id.Value, RoomRole.Observer, cancellationToken: Ct);
         var collabInvite = await ownerMesh.CreateInviteAsync(restrictedRoom.Id.Value, RoomRole.Collaborator, cancellationToken: Ct);
         var approverInvite = await ownerMesh.CreateInviteAsync(restrictedRoom.Id.Value, RoomRole.Approver, cancellationToken: Ct);
 
         var approvalPolicyRoom = await ownerMesh.CreateRoomAsync("collab-approvals", new RoomPolicy(AllowCollaboratorApprovals: true), Ct);
+        await rooms.AddAgentAsync(approvalPolicyRoom.Id, new MessagePrincipal(PrincipalKind.Human, approvalPolicyRoom.OwnerPrincipalId, "Owner"), agent.AgentId, agent.Name, Ct);
         var collabApproverInvite = await ownerMesh.CreateInviteAsync(approvalPolicyRoom.Id.Value, RoomRole.Collaborator, cancellationToken: Ct);
 
         await Assert.ThrowsAsync<IOException>(() =>
@@ -154,23 +162,37 @@ public sealed class MeshHostAndGuiTests
         await AssertUnauthorizedAsync(() => obsMesh.RevokeTrustAsync("card-1", cancellationToken: Ct));
         await AssertUnauthorizedAsync(() => obsMesh.BindChannelAsync(new ChannelBinding("b", "webhook", "k", agent.AgentId), Ct));
 
-        // Collaborator can read and message, cannot approve by default, cannot administer trust/channels/invites.
+        // Collaborator can read and message room session, cannot touch unrelated sessions, PTY, files, or host-wide admin/mutations.
         await using var collab = await host.ConnectAsync("collab-client", principalId: "collab-1", inviteToken: collabInvite.Token, cancellationToken: Ct);
         Assert.Equal(nameof(RoomRole.Collaborator), collab.Hello.Role);
         var collabMesh = collab.GetCapability<IWorkspaceMesh>()!;
         await collab.SendMessageAsync(session.SessionId, "from collaborator", [], Ct);
         var collabMsg = await collabMesh.PostRoomMessageAsync(restrictedRoom.Id.Value, "collab post", cancellationToken: Ct);
         Assert.Equal("collab post", collabMsg.Body);
+        await AssertUnauthorizedAsync(() => collab.SendMessageAsync(unrelatedSession.SessionId, "blocked", [], Ct));
+        await AssertUnauthorizedAsync(() => collab.InterruptAsync(unrelatedSession.SessionId, Ct));
+        await AssertUnauthorizedAsync(() => collab.CreateSessionAsync(host.Directory, Ct));
+        await AssertUnauthorizedAsync(() => collab.Files.WriteFileAsync(Path.Combine(host.Directory, "collab-blocked.txt"), new byte[] { 1 }, Ct));
+        await AssertUnauthorizedAsync(() => collab.Pty.StartPtyAsync(new RemotePtyStartRequest("sh", []), Ct));
         await AssertUnauthorizedAsync(() => collab.RespondApprovalAsync("req-1", true, cancellationToken: Ct));
         await AssertUnauthorizedAsync(() => collab.RespondQuestionAsync("req-1", [], cancellationToken: Ct));
         await AssertUnauthorizedAsync(() => collabMesh.CreateInviteAsync(restrictedRoom.Id.Value, RoomRole.Observer, cancellationToken: Ct));
         await AssertUnauthorizedAsync(() => collabMesh.GrantTrustAsync("card-1", new AgentTrustPermissions(), cancellationToken: Ct));
         await AssertUnauthorizedAsync(() => collabMesh.RevokeTrustAsync("card-1", cancellationToken: Ct));
         await AssertUnauthorizedAsync(() => collabMesh.BindChannelAsync(new ChannelBinding("b2", "webhook", "k2", agent.AgentId), Ct));
+        await AssertUnauthorizedAsync(() => collabMesh.ListChannelsAsync(Ct));
+        await AssertUnauthorizedAsync(() => collabMesh.ListTriggersAsync(Ct));
+        await AssertUnauthorizedAsync(() => collabMesh.ListTrustAsync(Ct));
+        await AssertUnauthorizedAsync(() => collabMesh.DiscoverAgentsAsync(cancellationToken: Ct));
+        await AssertUnauthorizedAsync(() => collabMesh.ListTargetsAsync(Ct));
 
-        // Approver can approve and records PrincipalId + Role in ResolvedBy.
+        // Approver can approve room session, cannot approve unrelated sessions, and records PrincipalId + Role in ResolvedBy.
         await using var approver = await host.ConnectAsync("approver-app", principalId: "approver-1", inviteToken: approverInvite.Token, cancellationToken: Ct);
         Assert.Equal(nameof(RoomRole.Approver), approver.Hello.Role);
+        var unrelatedApprovalTask = host.Backend.Pending.AskApprovalAsync(new RemoteApprovalRequest("req-unrelated", unrelatedSession.SessionId, "bash", "ls", "check"), cancellationToken: Ct);
+        await AssertUnauthorizedAsync(() => approver.RespondApprovalAsync("req-unrelated", true, cancellationToken: Ct));
+        Assert.True(await owner.RespondApprovalAsync("req-unrelated", false, cancellationToken: Ct));
+        Assert.False((await unrelatedApprovalTask)?.Allow);
         await using var ownerPendingEnumerator = owner.PendingChangesAsync(Ct).GetAsyncEnumerator(Ct);
         Assert.True(await ownerPendingEnumerator.MoveNextAsync());
         var approvalTask = host.Backend.Pending.AskApprovalAsync(new RemoteApprovalRequest("req-approver", session.SessionId, "bash", "ls", "check"), cancellationToken: Ct);
@@ -323,7 +345,7 @@ public sealed class MeshHostAndGuiTests
             harness.Ctx.Provide(IPersistentAgentManager.ServiceName, agents);
             harness.Ctx.Provide(IAgentMessageBus.ServiceName, bus);
             harness.Ctx.Provide(IAgentExecutionRouter.ServiceName, harness.Router);
-            harness.Ctx.Provide(ICollaborationRoomService.ServiceName, new InMemoryRoomService());
+            _ = new CollaborationRoomService(harness.Ctx);
             harness.Ctx.Provide(IAgentDiscoveryService.ServiceName, new InMemoryDiscoveryService());
             harness.Ctx.Provide(IExternalChannelRouter.ServiceName, new InMemoryChannelRouter());
             harness.Router.RegisterBackend(new StubLocalBackend());
@@ -633,65 +655,6 @@ public sealed class MeshHostAndGuiTests
         public bool CanHandle(AgentDispatchRequest request) => false;
         public Task<IAgentExecutionHandle> DispatchAsync(AgentDispatchRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IAgentExecutionHandle?> AttachAsync(AgentId agentId, string? targetId = null, CancellationToken cancellationToken = default) => Task.FromResult<IAgentExecutionHandle?>(null);
-    }
-
-    private sealed class InMemoryRoomService : ICollaborationRoomService
-    {
-        private readonly ConcurrentDictionary<RoomId, CollaborationRoom> _rooms = new();
-        private readonly ConcurrentDictionary<string, RoomInvite> _invites = new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<RoomId, List<RoomMessage>> _messages = new();
-
-        public Task<CollaborationRoom> CreateRoomAsync(string name, MessagePrincipal owner, RoomPolicy? policy = null, CancellationToken cancellationToken = default)
-        {
-            var id = RoomId.New();
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var room = new CollaborationRoom(id, name, owner.Id, policy ?? new RoomPolicy(),
-                [new RoomParticipant(owner.Id, owner.Kind, owner.DisplayName ?? owner.Id, RoomRole.Owner, now)], now, now);
-            _rooms[id] = room;
-            _messages[id] = [];
-            return Task.FromResult(room);
-        }
-
-        public CollaborationRoom? GetRoom(RoomId roomId) => _rooms.GetValueOrDefault(roomId);
-        public IReadOnlyList<CollaborationRoom> ListRooms() => [.. _rooms.Values];
-
-        public Task<RoomInvite> CreateInviteAsync(RoomId roomId, MessagePrincipal actor, RoomRole role, TimeSpan? ttl = null, int maxUses = 1, CancellationToken cancellationToken = default)
-        {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var invite = new RoomInvite(Guid.NewGuid().ToString("N"), roomId, $"inv-{Guid.NewGuid():N}", role, actor.Id, now, now + 3600_000, maxUses);
-            _invites[invite.Token] = invite;
-            return Task.FromResult(invite);
-        }
-
-        public Task<CollaborationRoom> RedeemInviteAsync(string token, MessagePrincipal joiner, AgentId? agentId = null, CancellationToken cancellationToken = default)
-        {
-            if (!_invites.TryGetValue(token, out var invite) || invite.Revoked)
-                throw new InvalidOperationException("invalid invite token");
-            var room = _rooms[invite.RoomId];
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var participants = room.Participants.Where(p => p.PrincipalId != joiner.Id)
-                .Append(new RoomParticipant(joiner.Id, joiner.Kind, joiner.DisplayName ?? joiner.Id, invite.Role, now, AgentId: agentId))
-                .ToList();
-            var updated = room with { Participants = participants, UpdatedAt = now };
-            _rooms[room.Id] = updated;
-            return Task.FromResult(updated);
-        }
-
-        public Task<bool> RevokeInviteAsync(RoomId roomId, string inviteId, MessagePrincipal actor, CancellationToken cancellationToken = default) => Task.FromResult(true);
-        public Task<CollaborationRoom> AddAgentAsync(RoomId roomId, MessagePrincipal actor, AgentId agentId, string? displayName = null, CancellationToken cancellationToken = default) => Task.FromResult(_rooms[roomId]);
-
-        public Task<RoomMessage> PostMessageAsync(RoomId roomId, MessagePrincipal sender, string body, AgentId? targetAgentId = null, string? replyToMessageId = null, CancellationToken cancellationToken = default)
-        {
-            var list = _messages[roomId];
-            var message = new RoomMessage(Guid.NewGuid().ToString("N"), roomId, list.Count + 1, sender.Id, sender.Kind, sender.DisplayName ?? sender.Id, body, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), targetAgentId, replyToMessageId);
-            list.Add(message);
-            return Task.FromResult(message);
-        }
-
-        public IReadOnlyList<RoomMessage> ReadMessages(RoomId roomId, long afterSeq = 0, int limit = 100)
-            => [.. _messages[roomId].Where(message => message.Seq > afterSeq).Take(limit)];
-
-        public bool CanPerform(RoomId roomId, string principalId, string action) => true;
     }
 
     private sealed class InMemoryDiscoveryService : IAgentDiscoveryService

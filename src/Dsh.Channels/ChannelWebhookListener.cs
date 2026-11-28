@@ -41,15 +41,27 @@ public sealed class ChannelWebhookListener(
                 ? IPAddress.Loopback
                 : IPAddress.Parse(host);
             var listener = new TcpListener(address, port);
-            listener.Start();
-            var boundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
-            var cts = new CancellationTokenSource();
-            _listener = listener;
-            _lifetime = cts;
-            Port = boundPort;
-            BaseUri = new Uri($"http://{address}:{boundPort}");
-            _acceptLoop = AcceptLoopAsync(listener, cts.Token);
-            return Task.FromResult(boundPort);
+            CancellationTokenSource? cts = null;
+            try
+            {
+                listener.Start();
+                var boundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+                var hostLiteral = address.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{address}]" : address.ToString();
+                var baseUri = new Uri($"http://{hostLiteral}:{boundPort}");
+                cts = new CancellationTokenSource();
+                _listener = listener;
+                _lifetime = cts;
+                Port = boundPort;
+                BaseUri = baseUri;
+                _acceptLoop = AcceptLoopAsync(listener, cts.Token);
+                return Task.FromResult(boundPort);
+            }
+            catch
+            {
+                cts?.Dispose();
+                listener.Stop();
+                throw;
+            }
         }
     }
 

@@ -45,16 +45,22 @@ public sealed class HostPendingDecisions : IDisposable
         => AskAsync<RemoteQuestionResponse>(new PendingEntry(
             PendingKinds.Question, request.SessionId, scope, null, request, NewCompletion()), request.RequestId, cancellationToken);
 
-    public bool RespondApproval(RemoteApprovalResponse response, PendingResolver resolver)
-        => Resolve(response.RequestId, PendingKinds.Approval, response,
-            response.Cancelled ? PendingResolutions.Cancelled : response.Allow ? PendingResolutions.Allowed : PendingResolutions.Rejected, resolver);
+    public string? GetSessionId(string requestId, string kind)
+    {
+        lock (_gate)
+            return _entries.TryGetValue(requestId, out var entry) && entry.Kind == kind ? entry.SessionId : null;
+    }
 
-    public bool RespondQuestion(RemoteQuestionResponse response, PendingResolver resolver)
+    public bool RespondApproval(RemoteApprovalResponse response, PendingResolver resolver, Func<string, bool>? canResolveSession = null)
+        => Resolve(response.RequestId, PendingKinds.Approval, response,
+            response.Cancelled ? PendingResolutions.Cancelled : response.Allow ? PendingResolutions.Allowed : PendingResolutions.Rejected, resolver, canResolveSession: canResolveSession);
+
+    public bool RespondQuestion(RemoteQuestionResponse response, PendingResolver resolver, Func<string, bool>? canResolveSession = null)
     {
         if (response.Status == "dismissed")
             response = response with { Answers = [], Reason = "user_cancelled" };
         return Resolve(response.RequestId, PendingKinds.Question, response,
-            response.Status == "dismissed" ? PendingResolutions.Dismissed : PendingResolutions.Answered, resolver);
+            response.Status == "dismissed" ? PendingResolutions.Dismissed : PendingResolutions.Answered, resolver, canResolveSession: canResolveSession);
     }
 
     public void CancelSession(string sessionId) => CancelWhere(entry => entry.SessionId == sessionId);
@@ -108,12 +114,14 @@ public sealed class HostPendingDecisions : IDisposable
         return await entry.Completion.Task.ConfigureAwait(false) as T;
     }
 
-    private bool Resolve(string requestId, string kind, object? answer, string resolution, PendingResolver resolver, PendingEntry? expected = null)
+    private bool Resolve(string requestId, string kind, object? answer, string resolution, PendingResolver resolver, PendingEntry? expected = null, Func<string, bool>? canResolveSession = null)
     {
         PendingEntry? entry;
         lock (_gate)
         {
             if (!_entries.TryGetValue(requestId, out entry) || entry.Kind != kind || expected is not null && !ReferenceEquals(entry, expected))
+                return false;
+            if (canResolveSession is not null && !canResolveSession(entry.SessionId))
                 return false;
             if (answer is RemoteApprovalResponse { Cancelled: false } decision && entry.Approval?.Availability is { } availability
                 && !(decision.Allow ? decision.RememberForSession ? availability.AllowForSession : availability.AllowOnce : availability.Reject))
