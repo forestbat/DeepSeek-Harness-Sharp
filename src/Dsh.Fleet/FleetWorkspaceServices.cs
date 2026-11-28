@@ -12,6 +12,10 @@ public sealed class FleetWorkspaceServices(MachineStore store, FleetOptions opti
     public IMachineAdministration Administration => this;
     public bool IrohAvailable => options.SshTransportAdapter is { Kind: MachineKinds.Iroh };
     public string? IrohExecutable => IrohAvailable ? options.SshTransportAdapter!.FindExecutable() : null;
+    public bool WslAvailable => WslTransport.IsAvailable(options.WslExecutablePath);
+
+    public Task<IReadOnlyList<string>> ListWslDistrosAsync(CancellationToken cancellationToken)
+        => WslTransport.ListDistrosAsync(cancellationToken, options.WslExecutablePath);
 
     public IWorkspaceClient CreateClient()
     {
@@ -43,7 +47,7 @@ public sealed class FleetWorkspaceServices(MachineStore store, FleetOptions opti
     public async Task<WorkspaceDeployment> DeployAsync(MachineSpec machine, DeploySettings deploy, bool force,
         Action<string> progress, CancellationToken cancellationToken)
     {
-        var result = await new RemoteDsharpInstaller(new SshTransport(machine, options.SshTransportAdapter), options.SshTransportAdapter)
+        var result = await WslTransport.CreateInstaller(machine, options)
             .EnsureAsync(deploy, progress, cancellationToken, options.ArchiveFactory, force, options.LocalProxy,
                 options.LocalHome ?? new HarnessHome(Path.GetDirectoryName(store.FilePath)!)).ConfigureAwait(false);
         return new(result.CommandPath, result.AlreadyPresent);

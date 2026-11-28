@@ -90,7 +90,8 @@ public sealed class MachineStore(HarnessHome home) : IMachineCatalog
             machine.RelayUrls,
             machine.OutboundTunnel is { } tunnel ? new OutboundTunnelSpec(tunnel.Mode ?? "", tunnel.ProxyUrl ?? "", tunnel.LocalPort) : null,
             machine.IrohExecutablePath,
-            machine.IrohArguments);
+            machine.IrohArguments,
+            machine.WslDistro);
 
     private static DeploySettings FromSettings(FleetDeploySettings? deploy)
     {
@@ -117,28 +118,30 @@ public sealed class MachineStore(HarnessHome home) : IMachineCatalog
 
     private static MachineSettings ToSettings(MachineSpec machine)
     {
-        var ssh = !machine.IsLocal;
+        var ssh = machine.IsSshTransport;
+        var wsl = machine.IsWsl;
         return new MachineSettings
         {
             Name = machine.Name,
             Kind = machine.Kind,
             Host = ssh ? machine.Host : null,
             Port = ssh && machine.Port != MachineSpec.DefaultSshPort ? machine.Port : null,
-            User = ssh && machine.User.Length > 0 ? machine.User : null,
+            User = (ssh || wsl) && machine.User.Length > 0 ? machine.User : null,
             Auth = ssh ? machine.Auth : null,
-            KeyPath = machine.KeyPath,
-            Proxy = machine.Proxy,
-            RemotePath = machine.RemotePath,
-            Password = machine.Password,
+            KeyPath = !wsl ? machine.KeyPath : null,
+            Proxy = !wsl ? machine.Proxy : null,
+            RemotePath = ssh || wsl ? machine.RemotePath : null,
+            Password = ssh ? machine.Password : null,
             HarnessHome = machine.HarnessHome,
-            SshOptions = machine.SshOptions is { Count: > 0 } options ? [.. options] : null,
-            EndpointId = machine.EndpointId,
-            RelayUrls = machine.RelayUrls is { Count: > 0 } relays ? [.. relays] : null,
-            IrohExecutablePath = machine.IrohExecutablePath,
-            IrohArguments = machine.IrohArguments,
-            OutboundTunnel = machine.OutboundTunnel is { } tunnel
+            SshOptions = ssh && machine.SshOptions is { Count: > 0 } options ? [.. options] : null,
+            EndpointId = ssh ? machine.EndpointId : null,
+            RelayUrls = ssh && machine.RelayUrls is { Count: > 0 } relays ? [.. relays] : null,
+            IrohExecutablePath = ssh ? machine.IrohExecutablePath : null,
+            IrohArguments = ssh ? machine.IrohArguments : null,
+            OutboundTunnel = ssh && machine.OutboundTunnel is { } tunnel
                 ? new OutboundTunnelSettings { Mode = tunnel.Mode, ProxyUrl = tunnel.ProxyUrl, LocalPort = tunnel.LocalPort }
                 : null,
+            WslDistro = wsl ? machine.WslDistro : null,
         };
     }
 
@@ -165,19 +168,22 @@ public sealed class MachineStore(HarnessHome home) : IMachineCatalog
         var invalid = machines.FirstOrDefault(machine => string.IsNullOrWhiteSpace(machine.Name) || machine.Name == MachineSpec.LocalName || machine.Name.Contains('/'));
         if (invalid is not null)
             throw new InvalidOperationException($"machine name \"{invalid.Name}\" is reserved or invalid (it must be non-empty, not \"{MachineSpec.LocalName}\", and contain no '/')");
+        var badKind = machines.FirstOrDefault(machine => machine.Kind is not (MachineKinds.Local or MachineKinds.Ssh or MachineKinds.Iroh or MachineKinds.Wsl));
+        if (badKind is not null)
+            throw new InvalidOperationException($"machine \"{badKind.Name}\" has an unknown kind \"{badKind.Kind}\"");
         var incomplete = machines.FirstOrDefault(machine => machine.Kind == MachineKinds.Ssh && string.IsNullOrWhiteSpace(machine.Host));
         if (incomplete is not null)
             throw new InvalidOperationException($"SSH machine \"{incomplete.Name}\" has no host");
-        var noUser = machines.FirstOrDefault(machine => !machine.IsLocal && string.IsNullOrWhiteSpace(machine.User));
+        var noUser = machines.FirstOrDefault(machine => machine.IsSshTransport && string.IsNullOrWhiteSpace(machine.User));
         if (noUser is not null)
             throw new InvalidOperationException($"remote machine \"{noUser.Name}\" has no SSH user");
-        var badAuth = machines.FirstOrDefault(machine => !machine.IsLocal && machine.Auth is not (SshAuth.Agent or SshAuth.Key or SshAuth.Password));
+        var badAuth = machines.FirstOrDefault(machine => machine.IsSshTransport && machine.Auth is not (SshAuth.Agent or SshAuth.Key or SshAuth.Password));
         if (badAuth is not null)
             throw new InvalidOperationException($"remote machine \"{badAuth.Name}\" has an invalid auth mode");
-        var noKey = machines.FirstOrDefault(machine => !machine.IsLocal && machine.Auth == SshAuth.Key && string.IsNullOrWhiteSpace(machine.KeyPath));
+        var noKey = machines.FirstOrDefault(machine => machine.IsSshTransport && machine.Auth == SshAuth.Key && string.IsNullOrWhiteSpace(machine.KeyPath));
         if (noKey is not null)
             throw new InvalidOperationException($"SSH machine \"{noKey.Name}\" uses key auth without a key path");
-        var noPassword = machines.FirstOrDefault(machine => !machine.IsLocal && machine.Auth == SshAuth.Password && string.IsNullOrEmpty(machine.Password));
+        var noPassword = machines.FirstOrDefault(machine => machine.IsSshTransport && machine.Auth == SshAuth.Password && string.IsNullOrEmpty(machine.Password));
         if (noPassword is not null)
             throw new InvalidOperationException($"SSH machine \"{noPassword.Name}\" uses password auth without a password");
         foreach (var machine in machines)

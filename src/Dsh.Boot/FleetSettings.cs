@@ -15,7 +15,7 @@ public sealed class FleetSettings
     public FleetDeploySettings? Deploy { get; set; }
 }
 
-/** 一台机器; kind 为 ssh、iroh 或 local, local 只用 name 与 harnessHome。 */
+/** 一台机器; kind 为 ssh、iroh、wsl 或 local, local 只用 name 与 harnessHome。 */
 public sealed class MachineSettings
 {
     [YamlMember(Alias = "name")]
@@ -78,6 +78,10 @@ public sealed class MachineSettings
     /** Optional application egress borrowed through SSH, independent of the machine's SSH proxy. */
     [YamlMember(Alias = "outboundTunnel")]
     public OutboundTunnelSettings? OutboundTunnel { get; set; }
+
+    /** kind 为 wsl 时的目标发行版名称; 留空使用默认发行版。 */
+    [YamlMember(Alias = "wslDistro")]
+    public string? WslDistro { get; set; }
 }
 
 /** Omitted fields do not enable an outbound tunnel. */

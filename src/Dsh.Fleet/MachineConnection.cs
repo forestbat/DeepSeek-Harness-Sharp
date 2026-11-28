@@ -192,7 +192,7 @@ public sealed class MachineConnection : IWorkspaceMachine
             if (Machine.IsLocal)
                 return await HostLink.OpenLocalAsync(Machine, _options, cancellationToken).ConfigureAwait(false);
             var commandPath = await ResolveCommandPathAsync(cancellationToken).ConfigureAwait(false);
-            return await HostLink.OpenSshAsync(Machine, commandPath, _options, cancellationToken).ConfigureAwait(false);
+            return await HostLink.OpenRemoteAsync(Machine, commandPath, _options, cancellationToken).ConfigureAwait(false);
         }
         catch (HostProtocolMismatchException error)
         {
@@ -226,7 +226,7 @@ public sealed class MachineConnection : IWorkspaceMachine
         {
             _forceRedeploy = true;
             var commandPath = await ResolveCommandPathAsync(cancellationToken).ConfigureAwait(false);
-            return await HostLink.OpenSshAsync(Machine, commandPath, _options, cancellationToken).ConfigureAwait(false);
+            return await HostLink.OpenRemoteAsync(Machine, commandPath, _options, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -240,12 +240,13 @@ public sealed class MachineConnection : IWorkspaceMachine
     {
         if (_commandPath is not null)
             return _commandPath;
+        var installer = WslTransport.CreateInstaller(Machine, _options);
         if (_options.Deploy.AutoDeploy)
         {
             var force = _forceRedeploy;
             _forceRedeploy = false;
             SetState(MachineConnectionState.Deploying, force ? "协议不兼容，正在重新部署…" : null);
-            var deployed = await new RemoteDsharpInstaller(new SshTransport(Machine, _options.SshTransportAdapter), _options.SshTransportAdapter).EnsureAsync(
+            var deployed = await installer.EnsureAsync(
                 _options.Deploy, step => SetState(MachineConnectionState.Deploying, step), cancellationToken, _options.ArchiveFactory, force,
                 localProxy: _options.LocalProxy, localHome: _options.LocalHome).ConfigureAwait(false);
             return _commandPath = deployed.CommandPath;
@@ -253,7 +254,7 @@ public sealed class MachineConnection : IWorkspaceMachine
 
         try
         {
-            return _commandPath = (await new RemoteDsharpInstaller(new SshTransport(Machine, _options.SshTransportAdapter), _options.SshTransportAdapter).InspectAsync(cancellationToken).ConfigureAwait(false)).CommandPath;
+            return _commandPath = (await installer.InspectAsync(cancellationToken).ConfigureAwait(false)).CommandPath;
         }
         catch (NotSupportedException)
         {

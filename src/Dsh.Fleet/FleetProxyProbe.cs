@@ -37,9 +37,9 @@ public sealed class FleetProxyProbe(FleetOptions options) : IWorkspaceProxyProbe
 
     private async Task ProbeSshCoreAsync(Operation operation, MachineSpec machine, CancellationToken cancellationToken)
     {
-        if (machine.IsLocal)
+        if (!machine.IsSshTransport)
         {
-            operation.SetResult(ProxyProbeOutcome.Unsupported, "Select an SSH machine to check its SSH connection.");
+            operation.SetResult(ProxyProbeOutcome.Unsupported, "Select an SSH or iroh machine to check its SSH connection.");
             return;
         }
         operation.Stage = ProxyProbeStage.Ssh;

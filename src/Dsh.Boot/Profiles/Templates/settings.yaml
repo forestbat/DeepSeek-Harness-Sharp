@@ -73,7 +73,7 @@ rules: []
 # fleet:
 #   machines:
 #     - name: build
-#       # ssh | local
+#       # ssh | iroh | wsl | local
 #       kind: ssh
 #       host: build.internal
 #       user: dev
@@ -81,6 +81,8 @@ rules: []
 #       auth: key
 #       keyPath: ~/.ssh/id_ed25519
 #       harnessHome: ~/.dsh-build
+#       # kind 为 wsl 时可用 wslDistro 指定发行版（留空使用默认发行版）
+#       # wslDistro: Ubuntu-24.04
 #   deploy:
 #     # 连接前自动安装/升级远端 dsharp
 #     autoDeploy: true
@@ -651,7 +653,7 @@ plugins:
 #   telemetry:
 #   运行目录
 #   run:
-# 机器清单
+# 机器清单（ssh | iroh | wsl | local；wsl 可选 wslDistro）
 # fleet:
 #   机器列表
 #   machines: []

@@ -59,7 +59,7 @@ public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adap
     }
 
     /** 后台把 stderr 读进有界缓冲(排空管道, 避免背压死锁), 供失败时汇报。 */
-    private static async Task DrainAsync(StreamReader reader, StringBuilder sink)
+    internal static async Task DrainAsync(StreamReader reader, StringBuilder sink)
     {
         try
         {
@@ -79,7 +79,7 @@ public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adap
         }
     }
 
-    private static string Describe(StringBuilder sink)
+    internal static string Describe(StringBuilder sink)
     {
         lock (sink)
         {
@@ -147,18 +147,35 @@ public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adap
         }
     }
 
-    internal static async Task<RemoteProcessResult> CaptureProcessAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    internal static async Task<RemoteProcessResult> CaptureProcessAsync(
+        ProcessStartInfo startInfo,
+        CancellationToken cancellationToken,
+        Func<Stream, CancellationToken, Task>? writeStdIn = null,
+        TimeSpan? timeout = null)
     {
         var process = Process.Start(startInfo) ?? throw new InvalidOperationException("failed to start process");
+        using var timed = timeout is not null ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken) : null;
+        if (timeout is { } limit)
+            timed!.CancelAfter(limit);
+        var token = timed?.Token ?? cancellationToken;
         using (process)
         {
-            // 命令式调用(远端执行/scp)不需要 stdin: 必须显式关闭, 否则 Win32-OpenSSH 会一直等 stdin EOF, 表现为卡死。
-            process.StandardInput.Close();
-            var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var error = process.StandardError.ReadToEndAsync(cancellationToken);
+            var output = process.StandardOutput.ReadToEndAsync(token);
+            var error = process.StandardError.ReadToEndAsync(token);
             try
             {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                if (writeStdIn is not null)
+                    await writeStdIn(process.StandardInput.BaseStream, token).ConfigureAwait(false);
+                // 命令式调用(远端执行/scp/wsl)在写完或无需输入后必须显式关闭 stdin, 否则远端进程会一直等 EOF。
+                process.StandardInput.Close();
+                await process.WaitForExitAsync(token).ConfigureAwait(false);
+                return new RemoteProcessResult(process.ExitCode, await output.ConfigureAwait(false), await error.ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (timeout is { } deadline && !cancellationToken.IsCancellationRequested)
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                throw new TimeoutException($"process timed out after {deadline.TotalSeconds:0}s: {startInfo.FileName}");
             }
             catch
             {
@@ -166,7 +183,6 @@ public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adap
                     process.Kill(entireProcessTree: true);
                 throw;
             }
-            return new RemoteProcessResult(process.ExitCode, await output.ConfigureAwait(false), await error.ConfigureAwait(false));
         }
     }
 

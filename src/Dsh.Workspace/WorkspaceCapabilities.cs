@@ -71,6 +71,8 @@ public interface IMachineAdministration
 {
     bool IrohAvailable { get; }
     string? IrohExecutable { get; }
+    bool WslAvailable { get; }
+    Task<IReadOnlyList<string>> ListWslDistrosAsync(CancellationToken cancellationToken);
     Task<MachineConnectionTest> TestConnectionAsync(MachineSpec machine, CancellationToken cancellationToken);
     Task<WorkspaceDeployment> DeployAsync(MachineSpec machine, DeploySettings deploy, bool force, Action<string> progress, CancellationToken cancellationToken);
     Task<MachineSpec> EnableIrohAsync(MachineSpec machine, DeploySettings deploy, Action<MachineSpec> persist, Action<string> progress, CancellationToken cancellationToken);
