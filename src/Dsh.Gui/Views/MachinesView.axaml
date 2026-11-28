@@ -28,6 +28,7 @@
       <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="6" IsEnabled="{Binding !Busy}">
         <Button Classes="Ghost" Classes.Primary="{Binding IsDraftingSsh}" Content="新增 SSH 机器" Command="{Binding NewSshCommand}" />
         <Button Classes="Ghost" Classes.Primary="{Binding IsDraftingIroh}" Content="新增 Iroh 机器" Command="{Binding NewIrohCommand}" IsVisible="{Binding IrohAvailable}" />
+        <Button Classes="Ghost" Classes.Primary="{Binding IsDraftingWsl}" Content="新增 WSL 机器" Command="{Binding NewWslCommand}" IsVisible="{Binding WslAvailable}" />
         <Button Classes="Ghost" Classes.Primary="{Binding IsDraftingLocal}" Content="新增本地 Harness Host" Command="{Binding NewLocalCommand}" />
         <Button Classes="Ghost" Content="删除" Command="{Binding DeleteCommand}" />
       </WrapPanel>
@@ -80,7 +81,20 @@
             <TextBlock Grid.Row="1" Classes="Label" Text="类型" />
             <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind, Mode=TwoWay}" />
           </Grid>
-          <TextBlock Classes="Tertiary" TextWrapping="Wrap" Text="ssh：普通 SSH；iroh：SSH-over-iroh；local：本机 home。两种远端连接共用 SSH 认证。" />
+          <TextBlock Classes="Tertiary" TextWrapping="Wrap" Text="ssh：普通 SSH；iroh：SSH-over-iroh；wsl：本机 WSL 发行版；local：本机 home。两种 SSH 连接共用认证。" />
+
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="8" IsVisible="{Binding IsWsl}">
+            <TextBlock Classes="Label" Text="WSL 发行版" />
+            <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Text="{Binding WslDistro, Mode=TwoWay}" PlaceholderText="留空使用默认 WSL 发行版，如 Ubuntu-24.04" />
+              <Button Grid.Column="1" Classes="Ghost" Content="刷新"
+                      Command="{Binding $parent[UserControl].((vm:MachinesViewModel)DataContext).RefreshWslDistrosCommand}" />
+            </Grid>
+            <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding WslDistros}" SelectedItem="{Binding SelectedWslDistro, Mode=TwoWay}"
+                      IsVisible="{Binding WslDistros.Count}" PlaceholderText="选择已检测到的发行版" />
+            <TextBlock Grid.Row="2" Classes="Label" Text="Linux 用户" />
+            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding User, Mode=TwoWay}" PlaceholderText="可选，留空使用 WSL 默认用户" />
+          </Grid>
 
           <Grid ColumnDefinitions="140,*,Auto,80" IsVisible="{Binding IsSsh}">
             <TextBlock Classes="Label" Text="SSH 主机" />
@@ -128,7 +142,7 @@
             <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Password, Mode=TwoWay}" PasswordChar="●" IsVisible="{Binding IsPassword}" />
           </Grid>
 
-          <Grid ColumnDefinitions="140,*" IsVisible="{Binding IsRemote}">
+          <Grid ColumnDefinitions="140,*" IsVisible="{Binding HasRemotePath}">
             <TextBlock Classes="Label" Text="远端目录" />
             <TextBox Grid.Column="1" Text="{Binding RemotePath, Mode=TwoWay}" PlaceholderText="留空 = 远端 HOME 目录" />
           </Grid>
@@ -144,14 +158,14 @@
               </Grid>
               <Grid ColumnDefinitions="140,*">
                 <TextBlock Classes="Label" Text="harness home" />
-                <TextBox Grid.Column="1" Text="{Binding HarnessHome, Mode=TwoWay}" PlaceholderText="SSH：留空 = 远端默认（~/.dsh）；本机条目必填" />
+                <TextBox Grid.Column="1" Text="{Binding HarnessHome, Mode=TwoWay}" PlaceholderText="SSH / WSL：留空 = 远端默认（~/.dsh）；本机条目必填" />
               </Grid>
-              <Grid ColumnDefinitions="140,*">
+              <Grid ColumnDefinitions="140,*" IsVisible="{Binding IsRemote}">
                 <TextBlock Classes="Label" Text="额外 ssh 选项" VerticalAlignment="Top" />
                 <TextBox Grid.Column="1" Text="{Binding SshOptions, Mode=TwoWay}" AcceptsReturn="True" MinHeight="60"
                          PlaceholderText="每行一个 Key=Value；Iroh 不允许覆盖 ProxyCommand" FontFamily="{DynamicResource Font.Mono}" />
               </Grid>
-              <Grid ColumnDefinitions="140,*">
+              <Grid ColumnDefinitions="140,*" IsVisible="{Binding IsRemote}">
                 <TextBlock Classes="Label" Text="Relay URLs" VerticalAlignment="Top" />
                 <TextBox Grid.Column="1" Text="{Binding RelayUrls, Mode=TwoWay}" AcceptsReturn="True" MinHeight="60"
                          PlaceholderText="每行一个 http(s) URL；留空使用默认 relay；普通 SSH 中用于首次引导" FontFamily="{DynamicResource Font.Mono}" />

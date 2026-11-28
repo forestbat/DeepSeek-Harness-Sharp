@@ -371,6 +371,58 @@ public sealed class MachinesViewModelTests : IDisposable
         Assert.Contains("nowhere", viewModel.Status, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task WslMachines_AreDisabledWithoutWsl_AndDiscoverDistrosAndRoundTripWhenAvailable()
+    {
+        var store = new MachineStore(new HarnessHome(_home));
+        var unavailable = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions { WslExecutablePath = Path.Combine(_home, "missing-wsl.exe") }));
+        unavailable.Load();
+        Assert.False(unavailable.WslAvailable);
+        Assert.False(unavailable.NewWslCommand.CanExecute(null));
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var shim = Path.Combine(_home, "wsl-vm-shim.sh");
+        File.WriteAllText(shim, "#!/bin/sh\nif [ \"${1:-}\" = \"--list\" ]; then printf 'Ubuntu-24.04\\nArch\\n'; fi\n");
+        File.SetUnixFileMode(shim, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions { WslExecutablePath = shim }));
+        viewModel.Load();
+        Assert.True(viewModel.WslAvailable);
+        Assert.True(viewModel.NewWslCommand.CanExecute(null));
+
+        viewModel.NewWslCommand.Execute(null);
+        Assert.True(viewModel.IsDraftingWsl);
+        Assert.True(viewModel.Editor!.IsWsl);
+        Assert.Contains(MachineKinds.Wsl, viewModel.Editor.Kinds);
+
+        await viewModel.RefreshWslDistrosCommand.ExecuteAsync(null);
+        Assert.Equal(["Ubuntu-24.04", "Arch"], viewModel.Editor.WslDistros);
+
+        viewModel.Editor.Name = "wsl-ubuntu";
+        viewModel.Editor.SelectedWslDistro = "Ubuntu-24.04";
+        viewModel.Editor.User = "dev";
+        viewModel.Editor.RemotePath = "~/repos";
+        viewModel.Editor.HarnessHome = "~/.dsh-wsl";
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.StatusIsError, viewModel.Status);
+        var saved = Assert.Single(store.Load().Machines);
+        Assert.Equal((MachineKinds.Wsl, "wsl-ubuntu", "Ubuntu-24.04", "dev", "~/repos", "~/.dsh-wsl"),
+            (saved.Kind, saved.Name, saved.WslDistro, saved.User, saved.RemotePath, saved.HarnessHome));
+        Assert.Equal("WSL", viewModel.Machines.Single(row => row.Name == "wsl-ubuntu").KindText);
+
+        var failingShim = Path.Combine(_home, "wsl-vm-fail.sh");
+        File.WriteAllText(failingShim, "#!/bin/sh\nprintf 'Wsl/Service/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\\n'\nexit 1\n");
+        File.SetUnixFileMode(failingShim, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var failingVm = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions { WslExecutablePath = failingShim }));
+        failingVm.Load();
+        await failingVm.RefreshWslDistrosCommand.ExecuteAsync(null);
+        Assert.True(failingVm.StatusIsError);
+        Assert.Contains("WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED", failingVm.Status, StringComparison.Ordinal);
+    }
+
     private static void Fill(MachineEditorViewModel editor, string name, string auth)
     {
         (editor.Name, editor.Host, editor.Port, editor.User, editor.Auth) = (name, $"{name}.internal", "2222", "dev", auth);
