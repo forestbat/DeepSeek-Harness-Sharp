@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.RemoteHost;
+using Dsh.Transport;
 using Dsh.Workspace;
 using StreamJsonRpc;
 
@@ -32,15 +33,18 @@ public sealed partial class AgentMeshViewModel : ObservableObject, IDisposable
     private readonly IWorkspaceClient? _workspace;
     private readonly FleetWorkspace? _fleet;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly Lock _watchGate = new();
     private IWorkspaceMesh? _directMesh;
     private IWorkspaceHost? _directHost;
+    private IWorkspaceMesh? _watchedMesh;
     private CancellationTokenSource? _watchCancellation;
     private bool _disposed;
 
-    public AgentMeshViewModel(FleetWorkspace fleet) : this(fleet.Client)
+    public AgentMeshViewModel(FleetWorkspace fleet)
     {
         _fleet = fleet;
         _fleet.Changed += OnWorkspaceChanged;
+        RefreshMachineNames();
     }
 
     public AgentMeshViewModel(IWorkspaceClient? workspace = null)
@@ -50,6 +54,8 @@ public sealed partial class AgentMeshViewModel : ObservableObject, IDisposable
             _workspace.Changed += OnWorkspaceChanged;
         RefreshMachineNames();
     }
+
+    private IWorkspaceClient? CurrentWorkspace => _fleet?.Client ?? _workspace;
 
     public ObservableCollection<string> MachineNames { get; } = [];
     public ObservableCollection<AgentProfile> Agents { get; } = [];
@@ -141,10 +147,13 @@ public sealed partial class AgentMeshViewModel : ObservableObject, IDisposable
         await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (_disposed)
+                return;
             IsBusy = true;
             var (mesh, host) = await ResolveMeshAsync(cancellationToken).ConfigureAwait(false);
             if (mesh is null)
             {
+                StopWatch();
                 IsConnected = false;
                 Status = $"{SelectedMachine} 未连接或不支持 0.5.0 智能体网络能力。";
                 return;
@@ -502,7 +511,7 @@ public sealed partial class AgentMeshViewModel : ObservableObject, IDisposable
     {
         if (_directMesh is not null)
             return (_directMesh, _directHost);
-        var machine = _workspace?.Find(SelectedMachine);
+        var machine = CurrentWorkspace?.Find(SelectedMachine);
         if (machine is null || machine.State != MachineConnectionState.Connected)
             return (null, null);
         var lease = await machine.WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
@@ -523,32 +532,60 @@ public sealed partial class AgentMeshViewModel : ObservableObject, IDisposable
 
     private void StartWatch(IWorkspaceMesh mesh)
     {
-        if (_watchCancellation is not null || _disposed)
-            return;
-        var signal = new CancellationTokenSource();
-        _watchCancellation = signal;
-        _ = WatchMeshChangesAsync(mesh, signal.Token);
+        CancellationTokenSource signal;
+        lock (_watchGate)
+        {
+            if (_disposed)
+                return;
+            if (ReferenceEquals(_watchedMesh, mesh) && _watchCancellation is not null)
+                return;
+            StopWatchLocked();
+            _watchedMesh = mesh;
+            signal = new CancellationTokenSource();
+            _watchCancellation = signal;
+        }
+        _ = WatchMeshChangesAsync(mesh, signal);
     }
 
     private void StopWatch()
     {
-        _watchCancellation?.Cancel();
-        _watchCancellation?.Dispose();
-        _watchCancellation = null;
+        lock (_watchGate)
+            StopWatchLocked();
     }
 
-    private async Task WatchMeshChangesAsync(IWorkspaceMesh mesh, CancellationToken cancellationToken)
+    private void StopWatchLocked()
+    {
+        _watchedMesh = null;
+        if (_watchCancellation is not { } signal)
+            return;
+        _watchCancellation = null;
+        signal.Cancel();
+    }
+
+    private async Task WatchMeshChangesAsync(IWorkspaceMesh mesh, CancellationTokenSource signal)
     {
         try
         {
-            await foreach (var change in mesh.MeshChangesAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var change in mesh.MeshChangesAsync(signal.Token).ConfigureAwait(false))
             {
                 if (change.Snapshot is { } snapshot)
                     RunOnUi(() => ApplySnapshot(snapshot));
             }
         }
-        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException)
+        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or JsonRpcException or RemoteInvocationException)
         {
+        }
+        finally
+        {
+            lock (_watchGate)
+            {
+                if (ReferenceEquals(_watchCancellation, signal))
+                {
+                    _watchCancellation = null;
+                    _watchedMesh = null;
+                }
+            }
+            signal.Dispose();
         }
     }
 
@@ -601,13 +638,56 @@ public sealed partial class AgentMeshViewModel : ObservableObject, IDisposable
             target.Add(item);
     }
 
-    private void OnWorkspaceChanged() => RunOnUi(RefreshMachineNames);
+    private void OnWorkspaceChanged() => RunOnUi(() =>
+    {
+        if (_disposed)
+            return;
+        RefreshMachineNames();
+        if (_directMesh is null)
+            _ = SyncWatchWithWorkspaceAsync();
+    });
+
+    private async Task SyncWatchWithWorkspaceAsync()
+    {
+        if (_disposed || _directMesh is not null)
+            return;
+        var machine = CurrentWorkspace?.Find(SelectedMachine);
+        if (machine is null || machine.State != MachineConnectionState.Connected)
+        {
+            StopWatch();
+            IsConnected = false;
+            return;
+        }
+        WorkspaceHostLease lease;
+        try
+        {
+            lease = await machine.WaitConnectedAsync(CancellationToken.None);
+        }
+        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            return;
+        }
+        if (_disposed || _directMesh is not null)
+            return;
+        var mesh = lease.Client.GetCapability<IWorkspaceMesh>();
+        if (mesh is null)
+        {
+            StopWatch();
+            IsConnected = false;
+            return;
+        }
+        bool needsRestart;
+        lock (_watchGate)
+            needsRestart = !ReferenceEquals(_watchedMesh, mesh) || _watchCancellation is null;
+        if (needsRestart)
+            await RefreshAsync(CancellationToken.None);
+    }
 
     private void RefreshMachineNames()
     {
-        if (_workspace is null)
+        if (CurrentWorkspace is not { } workspace)
             return;
-        List<string> names = [.. _workspace.Machines.Select(machine => machine.Machine.Name)];
+        List<string> names = [.. workspace.Machines.Select(machine => machine.Machine.Name)];
         if (names.SequenceEqual(MachineNames))
             return;
         var current = SelectedMachine;
