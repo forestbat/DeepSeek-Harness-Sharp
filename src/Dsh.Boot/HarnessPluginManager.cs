@@ -8,9 +8,9 @@ namespace Dsh.Boot;
 
 public sealed class HarnessPluginManager : IDisposable
 {
-    private const int CollectionGcRounds = 30;
-    private const int UninstallRetryAttempts = 15;
-    private const int UninstallRetryDelayMs = 25;
+    private const int CollectionGcRounds = 60;
+    private const int FileRetryAttempts = 15;
+    private const int FileRetryDelayMs = 25;
 
     private readonly PluginHost _host;
     private readonly Composition _composition;
@@ -165,11 +165,11 @@ public sealed class HarnessPluginManager : IDisposable
                 PluginInstall.Uninstall(directory, _pluginsDirectory);
                 return $"已删除安装目录 {directory}";
             }
-            catch (Exception error) when (attempt + 1 < UninstallRetryAttempts && error is IOException or UnauthorizedAccessException)
+            catch (Exception error) when (attempt + 1 < FileRetryAttempts && error is IOException or UnauthorizedAccessException)
             {
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true);
                 GC.WaitForPendingFinalizers();
-                await Task.Delay(UninstallRetryDelayMs);
+                await Task.Delay(FileRetryDelayMs);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
@@ -475,7 +475,21 @@ public sealed class HarnessPluginManager : IDisposable
     {
         try
         {
-            var installed = PluginInstall.Install(sourcePath, _pluginsDirectory, overwrite: true);
+            string installed;
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    installed = PluginInstall.Install(sourcePath, _pluginsDirectory, overwrite: true);
+                    break;
+                }
+                catch (Exception error) when (attempt + 1 < FileRetryAttempts && error is IOException or UnauthorizedAccessException)
+                {
+                    GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                    GC.WaitForPendingFinalizers();
+                    await Task.Delay(FileRetryDelayMs);
+                }
+            }
             var directory = Path.GetDirectoryName(installed)!;
             if (previousDirectory is not null && !PathsEqual(previousDirectory, directory))
                 await UninstallInstalledAsync(package);

@@ -454,6 +454,8 @@ public sealed class PluginGuiExtensibilityTests
                 ExecuteButton(reloadButton);
                 await viewModel.Preferences.PluginActionCommand.ExecutionTask!;
                 Render(window);
+                Assert.Contains("reloaded", viewModel.Preferences.Status, StringComparison.Ordinal);
+                Assert.Contains("plugin @test/gui-reload activated", viewModel.Preferences.Status, StringComparison.Ordinal);
 
                 Assert.Equal("", viewModel.Preferences.PluginInput);
                 viewModel.ShowChatCommand.Execute(null);
